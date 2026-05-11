@@ -13,6 +13,52 @@ Current features:
 - desktop icons
 - TOML config
 
+## Status
+
+Completed:
+
+- X11 popup window with floating/above-window hints
+- keyboard-driven filtering and selection
+- mouse selection and scroll wheel navigation
+- rounded window radius via the X Shape extension
+- `.desktop` launcher discovery from XDG application directories
+- launch history cache
+- freedesktop icon lookup and rendering
+- TOML-based config loading
+- Fontconfig-style font selection through Pango/Cairo
+- `dmenu` mode with newline or NUL-separated input
+- `dmenu` options like `--index`, `--password`, `--minimal-lines`,
+  `--with-nth`, `--accept-nth`, and `--match-nth`
+- configurable colors, sizing, padding, prompt, placeholder, and counter
+
+Partially complete:
+
+- visual parity with `fuzzel`
+- keybinding parity with `fuzzel`
+- `.desktop` execution fidelity
+- `dmenu` compatibility
+- window manager focus behavior
+
+Missing or planned:
+
+- exact `fuzzel` layout and font metrics
+- exact border rendering to match rounded corners
+- message wrapping and more exact text layout behavior
+- full `fuzzel.ini` keybinding coverage
+- richer text editing behavior
+- desktop actions support
+- filtering based on `OnlyShowIn` and `NotShowIn`
+- localized `.desktop` strings
+- startup notification support
+- launch prefix support
+- listing executables from `$PATH`
+- execute-input behavior outside current partial support
+- Rofi icon protocol support in `dmenu` mode
+- optional large icon preview for small result sets
+- broader UTF-8, emoji, IME, and clipboard/paste parity
+- multi-monitor placement logic closer to `fuzzel`
+- more aggressive performance work for huge lists
+
 ## Build
 
 ```sh
@@ -45,9 +91,9 @@ printf 'firefox\nfoot\nthunderbird\n' | ./target/release/xuzzel --dmenu
 
 ## Roadmap
 
-- closer visual parity with `fuzzel`
-- better input and keybinding parity
-- more complete `.desktop` and dmenu support
+- finish visual parity with `fuzzel`
+- finish feature parity with `fuzzel`
+- keep the X11/Rust implementation fast and maintainable
 
 ## License
 
