@@ -1,6 +1,6 @@
 use crate::config::Config;
 use crate::model::{IconBitmap, MatchResult};
-use cairo::{Context, Format, ImageSurface};
+use cairo::{Context, Format, ImageSurface, Operator, Surface};
 use libc::{c_void, free, malloc};
 use pango::FontDescription;
 use std::ffi::CString;
@@ -12,6 +12,7 @@ const KEY_PRESS: c_int = 2;
 const BUTTON_PRESS: c_int = 4;
 const EXPOSE: c_int = 12;
 const DESTROY_NOTIFY: c_int = 17;
+const MAP_NOTIFY: c_int = 19;
 const CLIENT_MESSAGE: c_int = 33;
 
 const KEY_PRESS_MASK: c_long = 1 << 0;
@@ -33,6 +34,7 @@ const XK_HOME: c_ulong = 0xff50;
 const XK_END: c_ulong = 0xff57;
 const CURRENT_TIME: c_ulong = 0;
 const GRAB_MODE_ASYNC: c_int = 1;
+const GRAB_SUCCESS: c_int = 0;
 
 #[repr(C)]
 pub struct Display {
@@ -41,6 +43,7 @@ pub struct Display {
 
 pub type Window = c_ulong;
 pub type Drawable = c_ulong;
+pub type Pixmap = c_ulong;
 pub type GC = *mut std::ffi::c_void;
 pub type KeySym = c_ulong;
 pub type Atom = c_ulong;
@@ -56,7 +59,14 @@ pub struct XRectangle {
 
 #[repr(C)]
 pub struct Visual {
-    _private: [u8; 0],
+    ext_data: *mut c_void,
+    visual_id: c_ulong,
+    class: c_int,
+    red_mask: c_ulong,
+    green_mask: c_ulong,
+    blue_mask: c_ulong,
+    bits_per_rgb: c_int,
+    map_entries: c_int,
 }
 
 #[repr(C)]
@@ -156,6 +166,14 @@ extern "C" {
         background: c_ulong,
     ) -> Window;
     fn XStoreName(display: *mut Display, window: Window, name: *const c_char) -> c_int;
+    fn XCreatePixmap(
+        display: *mut Display,
+        drawable: Drawable,
+        width: c_uint,
+        height: c_uint,
+        depth: c_uint,
+    ) -> Pixmap;
+    fn XFreePixmap(display: *mut Display, pixmap: Pixmap) -> c_int;
     fn XSelectInput(display: *mut Display, window: Window, event_mask: c_long) -> c_int;
     fn XMapRaised(display: *mut Display, window: Window) -> c_int;
     fn XMoveWindow(display: *mut Display, window: Window, x: c_int, y: c_int) -> c_int;
@@ -189,16 +207,7 @@ extern "C" {
         values: *mut std::ffi::c_void,
     ) -> GC;
     fn XFreeGC(display: *mut Display, gc: GC) -> c_int;
-    fn XSetForeground(display: *mut Display, gc: GC, foreground: c_ulong) -> c_int;
-    fn XFillRectangle(
-        display: *mut Display,
-        drawable: Drawable,
-        gc: GC,
-        x: c_int,
-        y: c_int,
-        width: c_uint,
-        height: c_uint,
-    ) -> c_int;
+    fn XSetGraphicsExposures(display: *mut Display, gc: GC, graphics_exposures: c_int) -> c_int;
     fn XCreateImage(
         display: *mut Display,
         visual: *mut Visual,
@@ -225,6 +234,7 @@ extern "C" {
     ) -> c_int;
     fn XDestroyImage(ximage: *mut XImage) -> c_int;
     fn XFlush(display: *mut Display) -> c_int;
+    fn XSync(display: *mut Display, discard: c_int) -> c_int;
     fn XNextEvent(display: *mut Display, event_return: *mut XEvent) -> c_int;
     fn XLookupString(
         event_struct: *mut XKeyEvent,
@@ -239,6 +249,18 @@ extern "C" {
         propagate: c_int,
         event_mask: c_long,
         event_send: *mut XEvent,
+    ) -> c_int;
+    fn XCopyArea(
+        display: *mut Display,
+        src: Drawable,
+        dest: Drawable,
+        gc: GC,
+        src_x: c_int,
+        src_y: c_int,
+        width: c_uint,
+        height: c_uint,
+        dest_x: c_int,
+        dest_y: c_int,
     ) -> c_int;
 }
 
@@ -270,10 +292,13 @@ pub enum UiAction {
 pub struct X11Ui {
     display: *mut Display,
     window: Window,
+    backbuffer: Pixmap,
     gc: GC,
+    cairo_surface: Option<Surface>,
     screen: c_int,
     width: u32,
     height: u32,
+    border_width: u32,
     row_height: u32,
     content_x: i32,
     content_width: u32,
@@ -293,7 +318,6 @@ impl X11Ui {
 
             let screen = XDefaultScreen(display);
             let root = XRootWindow(display, screen);
-            let border = rgb(config.colors.border) as c_ulong;
             let background = rgb(config.colors.background) as c_ulong;
             let border_width = config.border.width;
             let prompt_rows = if config.hide_prompt { 0 } else { 1 };
@@ -326,8 +350,8 @@ impl X11Ui {
                 0,
                 width,
                 height,
-                border_width,
-                border,
+                0,
+                0,
                 background,
             );
             let title = CString::new("xuzzel").unwrap();
@@ -341,6 +365,17 @@ impl X11Ui {
             apply_window_radius(display, window, width, height, config.border.radius);
 
             let gc = XCreateGC(display, window, 0, ptr::null_mut());
+            XSetGraphicsExposures(display, gc, 0);
+            let depth = XDefaultDepth(display, screen) as c_uint;
+            let backbuffer = XCreatePixmap(display, root, width, height, depth);
+            let cairo_surface = Surface::from_raw_full(cairo::ffi::cairo_xlib_surface_create(
+                display.cast(),
+                backbuffer,
+                XDefaultVisual(display, screen).cast(),
+                width as c_int,
+                height as c_int,
+            ))
+            .map_err(|err| format!("failed to create cairo xlib surface: {err}"))?;
 
             let sw = XDisplayWidth(display, screen);
             let sh = XDisplayHeight(display, screen);
@@ -357,19 +392,25 @@ impl X11Ui {
 
             XMoveWindow(display, window, x, y);
             XMapRaised(display, window);
-            request_focus(display, root, window);
+            XSync(display, 0);
+            let _ = request_focus(display, root, window);
             XFlush(display);
 
             Ok(Self {
                 display,
                 window,
+                backbuffer,
                 gc,
+                cairo_surface: Some(cairo_surface),
                 screen,
                 width,
                 height,
+                border_width,
                 row_height,
-                content_x: config.horizontal_pad as i32,
-                content_width: width.saturating_sub(config.horizontal_pad.saturating_mul(2)),
+                content_x: border_width as i32 + config.horizontal_pad as i32,
+                content_width: width
+                    .saturating_sub(border_width.saturating_mul(2))
+                    .saturating_sub(config.horizontal_pad.saturating_mul(2)),
                 baseline_offset: baseline_offset.max(((row_height as i32) / 2) + 5),
                 icon_size,
                 icon_gap: 10,
@@ -386,209 +427,217 @@ impl X11Ui {
         matches: &[MatchResult],
         selected: usize,
     ) {
+        let surface = match self.cairo_surface.as_ref() {
+            Some(surface) => surface,
+            None => return,
+        };
+        let context = match Context::new(surface) {
+            Ok(context) => context,
+            Err(_) => return,
+        };
+
+        self.draw_window_background_on_context(&context, config);
+
+        let mut cursor_y =
+            self.border_width as i32 + config.vertical_pad as i32 + self.baseline_offset;
+        if !config.message.is_empty() {
+            for line in config.message.lines() {
+                self.draw_text_on_context(
+                    &context,
+                    self.content_x,
+                    cursor_y,
+                    line,
+                    rgb(config.colors.message),
+                );
+                cursor_y += self.row_height as i32 + config.inner_pad as i32;
+            }
+        }
+
+        if !config.hide_prompt {
+            let prompt_width = self.text_width(&config.prompt).max(8);
+            self.draw_text_on_context(
+                &context,
+                self.content_x,
+                cursor_y,
+                &config.prompt,
+                rgb(config.colors.prompt),
+            );
+
+            let display_input = if input.is_empty() && !config.placeholder.is_empty() {
+                config.placeholder.as_str()
+            } else {
+                input
+            };
+            let input_color = if input.is_empty() && !config.placeholder.is_empty() {
+                rgb(config.colors.placeholder)
+            } else {
+                rgb(config.colors.input)
+            };
+            self.draw_text_on_context(
+                &context,
+                self.content_x + prompt_width + 4,
+                cursor_y,
+                display_input,
+                input_color,
+            );
+            if config.match_counter {
+                let counter = format!("{}/{}", matches.len(), total_matches);
+                let counter_width = self.text_width(&counter);
+                self.draw_text_on_context(
+                    &context,
+                    (self.width as i32 - config.horizontal_pad as i32 - counter_width)
+                        .max(self.content_x),
+                    cursor_y,
+                    &counter,
+                    rgb(config.colors.counter),
+                );
+            }
+            cursor_y += self.row_height as i32 + config.inner_pad as i32;
+        }
+
+        let row_start = cursor_y - self.baseline_offset;
+        for (idx, item) in matches.iter().enumerate() {
+            let row_y = row_start + (idx as i32 * self.row_height as i32);
+            let active = idx == selected;
+
+            if active {
+                set_source_rgb(&context, rgb(config.colors.selection_background));
+                context.rectangle(
+                    self.content_x as f64,
+                    row_y as f64,
+                    self.content_width as f64,
+                    self.row_height.saturating_sub(1) as f64,
+                );
+                let _ = context.fill();
+            }
+
+            let fg = if active {
+                rgb(config.colors.selection_text)
+            } else {
+                rgb(config.colors.text)
+            };
+
+            let mut text_x = self.content_x;
+            if let Some(icon) = item.entry.icon.as_deref() {
+                self.draw_icon_on_context(
+                    &context,
+                    icon,
+                    self.content_x,
+                    row_y + ((self.row_height as i32 - self.icon_size as i32) / 2),
+                );
+                text_x += self.icon_size as i32 + self.icon_gap;
+            }
+
+            self.draw_text_on_context(
+                &context,
+                text_x,
+                row_y + self.baseline_offset,
+                &item.entry.label,
+                fg,
+            );
+            if !item.matched_indices.is_empty() {
+                self.draw_match_hint_on_context(
+                    &context,
+                    text_x,
+                    &item.entry.label,
+                    &item.matched_indices,
+                    row_y + self.baseline_offset,
+                    if active {
+                        rgb(config.colors.selection_match)
+                    } else {
+                        rgb(config.colors.matched_text)
+                    },
+                );
+            }
+        }
+
+        surface.flush();
         unsafe {
-            XSetForeground(self.display, self.gc, rgb(config.colors.background) as c_ulong);
-            XFillRectangle(
+            XCopyArea(
                 self.display,
+                self.backbuffer,
                 self.window,
                 self.gc,
                 0,
                 0,
                 self.width,
-                config
-                    .vertical_pad
-                    .saturating_mul(2)
-                    .saturating_add((matches.len() as u32 + 3) * self.row_height),
+                self.height,
+                0,
+                0,
             );
-
-            let mut cursor_y = config.vertical_pad as i32 + self.baseline_offset;
-            if !config.message.is_empty() {
-                for line in config.message.lines() {
-                    self.draw_text(
-                        self.content_x,
-                        cursor_y,
-                        line,
-                        rgb(config.colors.message) as c_ulong,
-                        rgb(config.colors.background),
-                    );
-                    cursor_y += self.row_height as i32 + config.inner_pad as i32;
-                }
-            }
-
-            if !config.hide_prompt {
-                let prompt_width = self.text_width(&config.prompt).max(8);
-                self.draw_text(
-                    self.content_x,
-                    cursor_y,
-                    &config.prompt,
-                    rgb(config.colors.prompt) as c_ulong,
-                    rgb(config.colors.background),
-                );
-
-                let display_input = if input.is_empty() && !config.placeholder.is_empty() { config.placeholder.as_str() } else { input };
-                let input_color = if input.is_empty() && !config.placeholder.is_empty() {
-                    rgb(config.colors.placeholder)
-                } else {
-                    rgb(config.colors.input)
-                };
-                self.draw_text(
-                    self.content_x + prompt_width + 4,
-                    cursor_y,
-                    display_input,
-                    input_color as c_ulong,
-                    rgb(config.colors.background),
-                );
-                if config.match_counter {
-                    let counter = format!("{}/{}", matches.len(), total_matches);
-                    let counter_width = self.text_width(&counter);
-                    self.draw_text(
-                        (self.width as i32 - config.horizontal_pad as i32 - counter_width).max(self.content_x),
-                        cursor_y,
-                        &counter,
-                        rgb(config.colors.counter) as c_ulong,
-                        rgb(config.colors.background),
-                    );
-                }
-                cursor_y += self.row_height as i32 + config.inner_pad as i32;
-            }
-
-            let row_start = cursor_y - self.baseline_offset;
-            for (idx, item) in matches.iter().enumerate() {
-                let row_y = row_start + (idx as i32 * self.row_height as i32);
-                let active = idx == selected;
-
-                if active {
-                    XSetForeground(
-                        self.display,
-                        self.gc,
-                        rgb(config.colors.selection_background) as c_ulong,
-                    );
-                    XFillRectangle(
-                        self.display,
-                        self.window,
-                        self.gc,
-                        self.content_x,
-                        row_y,
-                        self.content_width,
-                        self.row_height.saturating_sub(1),
-                    );
-                }
-
-                let fg = if active {
-                    rgb(config.colors.selection_text) as c_ulong
-                } else {
-                    rgb(config.colors.text) as c_ulong
-                };
-
-                let mut text_x = self.content_x;
-                if let Some(icon) = item.entry.icon.as_deref() {
-                    self.draw_icon(
-                        icon,
-                        self.content_x,
-                        row_y + ((self.row_height as i32 - self.icon_size as i32) / 2),
-                        rgb(config.colors.background),
-                    );
-                    text_x += self.icon_size as i32 + self.icon_gap;
-                }
-
-                self.draw_text(
-                    text_x,
-                    row_y + self.baseline_offset,
-                    &item.entry.label,
-                    fg,
-                    if active {
-                        rgb(config.colors.selection_background)
-                    } else {
-                        rgb(config.colors.background)
-                    },
-                );
-                if !item.matched_indices.is_empty() {
-                    self.draw_match_hint(
-                        text_x,
-                        &item.entry.label,
-                        &item.matched_indices,
-                        row_y + self.baseline_offset,
-                        if active {
-                            rgb(config.colors.selection_background)
-                        } else {
-                            rgb(config.colors.background)
-                        },
-                        if active {
-                            rgb(config.colors.selection_match) as c_ulong
-                        } else {
-                            rgb(config.colors.matched_text) as c_ulong
-                        },
-                    );
-                }
-            }
-
+        }
+        unsafe {
             XFlush(self.display);
         }
     }
 
-    fn draw_icon(&self, icon: &IconBitmap, x: i32, y: i32, background: u32) {
-        let pixel_count = (icon.width * icon.height) as usize;
-        let byte_len = pixel_count * 4;
-        unsafe {
-            let data = malloc(byte_len) as *mut u8;
-            if data.is_null() {
-                return;
-            }
-
-            let bg_r = ((background >> 16) & 0xff) as u8;
-            let bg_g = ((background >> 8) & 0xff) as u8;
-            let bg_b = (background & 0xff) as u8;
-
-            for i in 0..pixel_count {
-                let src = i * 4;
-                let dst = i * 4;
-                let r = icon.rgba[src];
-                let g = icon.rgba[src + 1];
-                let b = icon.rgba[src + 2];
-                let a = icon.rgba[src + 3] as u16;
-
-                let blend = |fg: u8, bg: u8| -> u8 {
-                    (((fg as u16 * a) + (bg as u16 * (255 - a))) / 255) as u8
-                };
-
-                *data.add(dst) = blend(b, bg_b);
-                *data.add(dst + 1) = blend(g, bg_g);
-                *data.add(dst + 2) = blend(r, bg_r);
-                *data.add(dst + 3) = 0;
-            }
-
-            let image = XCreateImage(
-                self.display,
-                XDefaultVisual(self.display, self.screen),
-                XDefaultDepth(self.display, self.screen) as c_uint,
-                2,
-                0,
-                data.cast::<c_char>(),
-                icon.width,
-                icon.height,
-                32,
-                0,
-            );
-
-            if image.is_null() {
-                free(data.cast::<c_void>());
-                return;
-            }
-
-            XPutImage(
-                self.display,
-                self.window,
-                self.gc,
-                image,
-                0,
-                0,
-                x,
-                y,
-                icon.width,
-                icon.height,
-            );
-            XDestroyImage(image);
+    fn draw_text_on_context(
+        &self,
+        context: &Context,
+        x: i32,
+        baseline_y: i32,
+        text: &str,
+        color: u32,
+    ) {
+        let clean = text.replace('\0', "");
+        if clean.is_empty() {
+            return;
         }
+        let mut surface = match self.render_text_surface(&clean, color) {
+            Some(surface) => surface,
+            None => return,
+        };
+        let y = baseline_y - self.baseline_offset;
+        self.draw_surface_on_context(context, &mut surface, x, y);
+    }
+
+    fn draw_match_hint_on_context(
+        &self,
+        context: &Context,
+        start_x: i32,
+        text: &str,
+        indices: &[usize],
+        baseline: i32,
+        color: u32,
+    ) {
+        let mut cursor_x = start_x;
+        for (idx, ch) in text.chars().enumerate() {
+            let glyph = ch.to_string();
+            let width = self.text_width(&glyph);
+            if indices.contains(&idx) {
+                self.draw_text_on_context(context, cursor_x, baseline, &glyph, color);
+            }
+            cursor_x += width.max(8);
+        }
+    }
+
+    fn draw_icon_on_context(&self, context: &Context, icon: &IconBitmap, x: i32, y: i32) {
+        let mut surface = match ImageSurface::create(Format::ARgb32, icon.width as i32, icon.height as i32) {
+            Ok(surface) => surface,
+            Err(_) => return,
+        };
+        {
+            let stride = surface.stride() as usize;
+            let mut data = match surface.data() {
+                Ok(data) => data,
+                Err(_) => return,
+            };
+            for row in 0..icon.height as usize {
+                for col in 0..icon.width as usize {
+                    let src = (row * icon.width as usize + col) * 4;
+                    let dst = row * stride + col * 4;
+                    let red = icon.rgba[src];
+                    let green = icon.rgba[src + 1];
+                    let blue = icon.rgba[src + 2];
+                    let alpha = icon.rgba[src + 3] as u16;
+                    data[dst] = ((blue as u16 * alpha) / 255) as u8;
+                    data[dst + 1] = ((green as u16 * alpha) / 255) as u8;
+                    data[dst + 2] = ((red as u16 * alpha) / 255) as u8;
+                    data[dst + 3] = alpha as u8;
+                }
+            }
+        }
+        self.draw_surface_on_context(context, &mut surface, x, y);
     }
 
     pub fn next_action(
@@ -605,6 +654,11 @@ impl X11Ui {
 
             match event.type_ {
                 EXPOSE => UiAction::Continue,
+                MAP_NOTIFY => {
+                    let root = XRootWindow(self.display, self.screen);
+                    let _ = request_focus(self.display, root, self.window);
+                    UiAction::Continue
+                }
                 DESTROY_NOTIFY => UiAction::Cancel,
                 BUTTON_PRESS => {
                     let button = event.xbutton;
@@ -668,35 +722,27 @@ impl X11Ui {
         }
     }
 
-    fn draw_text(&self, x: i32, baseline_y: i32, text: &str, color: c_ulong, background: u32) {
-        let clean = text.replace('\0', "");
-        if clean.is_empty() {
-            return;
-        }
-
-        let mut surface = match self.render_text_surface(&clean, color as u32, background) {
-            Some(surface) => surface,
-            None => return,
-        };
-        let y = baseline_y - self.baseline_offset;
-        self.blit_surface(&mut surface, x, y);
+    fn make_layout_for_context(&self, context: &Context, text: &str) -> Option<pango::Layout> {
+        let layout = pangocairo::functions::create_layout(context);
+        let font = FontDescription::from_string(&self.font_name);
+        layout.set_font_description(Some(&font));
+        layout.set_text(text);
+        Some(layout)
     }
 
-    fn render_text_surface(
-        &self,
-        text: &str,
-        color: u32,
-        background: u32,
-    ) -> Option<ImageSurface> {
+    fn render_text_surface(&self, text: &str, color: u32) -> Option<ImageSurface> {
         let (layout, width, height) = self.make_layout(text)?;
         let surface = ImageSurface::create(
-            Format::Rgb24,
+            Format::ARgb32,
             width.max(1),
             height.max(self.row_height as i32),
         )
         .ok()?;
         let context = Context::new(&surface).ok()?;
-        paint_background(&context, background);
+        context.set_operator(Operator::Source);
+        context.set_source_rgba(0.0, 0.0, 0.0, 0.0);
+        let _ = context.paint();
+        context.set_operator(Operator::Over);
         set_source_rgb(&context, color);
         context.move_to(0.0, 0.0);
         pangocairo::functions::show_layout(&context, &layout);
@@ -706,34 +752,82 @@ impl X11Ui {
     fn make_layout(&self, text: &str) -> Option<(pango::Layout, i32, i32)> {
         let surface = ImageSurface::create(Format::Rgb24, 1, 1).ok()?;
         let context = Context::new(&surface).ok()?;
-        let layout = pangocairo::functions::create_layout(&context);
-        let font = FontDescription::from_string(&self.font_name);
-        layout.set_font_description(Some(&font));
-        layout.set_text(text);
+        let layout = self.make_layout_for_context(&context, text)?;
         let (width, height) = layout.pixel_size();
         Some((layout, width, height))
     }
 
-    fn blit_surface(&self, surface: &mut ImageSurface, x: i32, y: i32) {
+    fn draw_surface_on_context(
+        &self,
+        context: &Context,
+        surface: &mut ImageSurface,
+        x: i32,
+        y: i32,
+    ) {
+        let width = surface.width() as f64;
+        let height = surface.height() as f64;
+        surface.flush();
+        let _ = context.save();
+        context.rectangle(x as f64, y as f64, width, height);
+        context.clip();
+        let _ = context.set_source_surface(surface, x as f64, y as f64);
+        let _ = context.paint();
+        let _ = context.restore();
+    }
+
+    fn blit_surface(&self, surface: &mut ImageSurface, x: i32, y: i32, background: Option<u32>) {
         surface.flush();
         let width = surface.width() as u32;
         let height = surface.height() as u32;
-        let stride = surface.stride();
+        let stride = surface.stride() as usize;
 
         unsafe {
             let Ok(data_view) = surface.data() else {
                 return;
             };
-            let byte_len = (stride * height as i32) as usize;
+            let visual = XDefaultVisual(self.display, self.screen);
+            if visual.is_null() {
+                return;
+            }
+
+            let byte_len = (width * height * 4) as usize;
             let data = malloc(byte_len) as *mut u8;
             if data.is_null() {
                 return;
             }
-            ptr::copy_nonoverlapping(data_view.as_ptr(), data, byte_len);
+
+            let red_mask = (*visual).red_mask as u32;
+            let green_mask = (*visual).green_mask as u32;
+            let blue_mask = (*visual).blue_mask as u32;
+
+            for row in 0..height as usize {
+                for col in 0..width as usize {
+                    let src = row * stride + col * 4;
+                    let dst = (row * width as usize + col) * 4;
+                    let blue = data_view[src];
+                    let green = data_view[src + 1];
+                    let red = data_view[src + 2];
+                    let alpha = data_view[src + 3];
+                    let (red, green, blue) = if let Some(bg) = background {
+                        let bg_red = ((bg >> 16) & 0xff) as u8;
+                        let bg_green = ((bg >> 8) & 0xff) as u8;
+                        let bg_blue = (bg & 0xff) as u8;
+                        blend_pixel(red, green, blue, alpha, bg_red, bg_green, bg_blue)
+                    } else {
+                        (red, green, blue)
+                    };
+                    let pixel = pack_visual_pixel(red, green, blue, red_mask, green_mask, blue_mask);
+                    let bytes = pixel.to_ne_bytes();
+                    *data.add(dst) = bytes[0];
+                    *data.add(dst + 1) = bytes[1];
+                    *data.add(dst + 2) = bytes[2];
+                    *data.add(dst + 3) = bytes[3];
+                }
+            }
 
             let image = XCreateImage(
                 self.display,
-                XDefaultVisual(self.display, self.screen),
+                visual,
                 XDefaultDepth(self.display, self.screen) as c_uint,
                 2,
                 0,
@@ -741,7 +835,7 @@ impl X11Ui {
                 width,
                 height,
                 32,
-                stride,
+                (width * 4) as c_int,
             );
 
             if image.is_null() {
@@ -765,30 +859,46 @@ impl X11Ui {
         }
     }
 
-    fn draw_match_hint(
-        &self,
-        start_x: i32,
-        text: &str,
-        indices: &[usize],
-        baseline: i32,
-        background: u32,
-        color: c_ulong,
-    ) {
-        let mut cursor_x = start_x;
-        for (idx, ch) in text.chars().enumerate() {
-            let glyph = ch.to_string();
-            let width = self.text_width(&glyph);
-            if indices.contains(&idx) {
-                self.draw_text(cursor_x, baseline, &glyph, color, background);
-            }
-            cursor_x += width.max(8);
-        }
-    }
-
     fn text_width(&self, text: &str) -> i32 {
         self.make_layout(&text.replace('\0', ""))
             .map(|(_, width, _)| width.max(8))
             .unwrap_or_else(|| (text.len() as i32) * 8)
+    }
+
+    fn draw_window_background_on_context(&self, context: &Context, config: &Config) {
+        let outer_radius = config.border.radius.min(self.width / 2).min(self.height / 2) as f64;
+        draw_rounded_rect(
+            context,
+            0.0,
+            0.0,
+            self.width as f64,
+            self.height as f64,
+            outer_radius,
+        );
+        set_source_rgb(context, rgb(config.colors.border));
+        let _ = context.fill();
+
+        let border = self.border_width as f64;
+        let inner_width = (self.width as f64 - border * 2.0).max(0.0);
+        let inner_height = (self.height as f64 - border * 2.0).max(0.0);
+        if inner_width > 0.0 && inner_height > 0.0 {
+            let inner_radius = config
+                .border
+                .radius
+                .saturating_sub(self.border_width)
+                .min(inner_width as u32 / 2)
+                .min(inner_height as u32 / 2) as f64;
+            draw_rounded_rect(
+                context,
+                border,
+                border,
+                inner_width,
+                inner_height,
+                inner_radius,
+            );
+            set_source_rgb(context, rgb(config.colors.background));
+            let _ = context.fill();
+        }
     }
 }
 
@@ -800,7 +910,8 @@ fn row_index_from_y(config: &Config, y: i32, row_height: u32) -> usize {
     };
     let prompt_rows: u32 = if config.hide_prompt { 0 } else { 1 };
     let inner_gaps = message_rows + prompt_rows.saturating_sub(1);
-    let list_start_y = config.vertical_pad as i32
+    let list_start_y = config.border.width as i32
+        + config.vertical_pad as i32
         + ((message_rows + prompt_rows) * row_height) as i32
         + (inner_gaps * config.inner_pad) as i32;
     if y < list_start_y {
@@ -886,18 +997,19 @@ fn set_floating_hints(display: *mut Display, window: Window, root: Window) {
     }
 }
 
-fn request_focus(display: *mut Display, root: Window, window: Window) {
+fn request_focus(display: *mut Display, root: Window, window: Window) -> bool {
     unsafe {
         XRaiseWindow(display, window);
         send_active_window(display, root, window);
-        let _ = XGrabKeyboard(
+        XSync(display, 0);
+        XGrabKeyboard(
             display,
             window,
             1,
             GRAB_MODE_ASYNC,
             GRAB_MODE_ASYNC,
             CURRENT_TIME,
-        );
+        ) == GRAB_SUCCESS
     }
 }
 
@@ -946,11 +1058,16 @@ fn send_active_window(display: *mut Display, root: Window, window: Window) {
 
 impl Drop for X11Ui {
     fn drop(&mut self) {
+        if let Some(surface) = self.cairo_surface.take() {
+            surface.finish();
+            drop(surface);
+        }
         unsafe {
             let _ = self.screen;
             let _ = self.height;
             XUngrabKeyboard(self.display, CURRENT_TIME);
             XFreeGC(self.display, self.gc);
+            XFreePixmap(self.display, self.backbuffer);
             XDestroyWindow(self.display, self.window);
             XCloseDisplay(self.display);
         }
@@ -1050,14 +1167,78 @@ fn measure_font(font_name: &str) -> (u32, i32) {
     (width.max(8) as u32, baseline.max(16))
 }
 
-fn paint_background(context: &Context, color: u32) {
-    set_source_rgb(context, color);
-    let _ = context.paint();
-}
-
 fn set_source_rgb(context: &Context, color: u32) {
     let r = ((color >> 16) & 0xff) as f64 / 255.0;
     let g = ((color >> 8) & 0xff) as f64 / 255.0;
     let b = (color & 0xff) as f64 / 255.0;
     context.set_source_rgb(r, g, b);
+}
+
+fn pack_visual_pixel(red: u8, green: u8, blue: u8, red_mask: u32, green_mask: u32, blue_mask: u32) -> u32 {
+    scale_channel(red, red_mask) | scale_channel(green, green_mask) | scale_channel(blue, blue_mask)
+}
+
+fn blend_pixel(
+    red: u8,
+    green: u8,
+    blue: u8,
+    alpha: u8,
+    bg_red: u8,
+    bg_green: u8,
+    bg_blue: u8,
+) -> (u8, u8, u8) {
+    if alpha == 255 {
+        return (red, green, blue);
+    }
+    if alpha == 0 {
+        return (bg_red, bg_green, bg_blue);
+    }
+
+    let alpha = alpha as u16;
+    let blend = |fg: u8, bg: u8| -> u8 {
+        (((fg as u16 * alpha) + (bg as u16 * (255 - alpha))) / 255) as u8
+    };
+    (
+        blend(red, bg_red),
+        blend(green, bg_green),
+        blend(blue, bg_blue),
+    )
+}
+
+fn scale_channel(channel: u8, mask: u32) -> u32 {
+    if mask == 0 {
+        return 0;
+    }
+
+    let shift = mask.trailing_zeros();
+    let bits = (mask >> shift).count_ones();
+    let max_value = (1u32 << bits) - 1;
+    let scaled = (channel as u32 * max_value + 127) / 255;
+    (scaled << shift) & mask
+}
+
+fn draw_rounded_rect(
+    context: &Context,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    radius: f64,
+) {
+    let radius = radius.min(width / 2.0).min(height / 2.0).max(0.0);
+    if radius == 0.0 {
+        context.rectangle(x, y, width, height);
+        return;
+    }
+
+    let right = x + width;
+    let bottom = y + height;
+    let quarter = std::f64::consts::FRAC_PI_2;
+
+    context.new_sub_path();
+    context.arc(right - radius, y + radius, radius, -quarter, 0.0);
+    context.arc(right - radius, bottom - radius, radius, 0.0, quarter);
+    context.arc(x + radius, bottom - radius, radius, quarter, 2.0 * quarter);
+    context.arc(x + radius, y + radius, radius, 2.0 * quarter, 3.0 * quarter);
+    context.close_path();
 }

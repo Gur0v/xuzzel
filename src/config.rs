@@ -191,7 +191,20 @@ where
 {
     let raw = String::deserialize(deserializer)?;
     let hex = raw.trim().trim_start_matches('#');
-    u32::from_str_radix(hex, 16).map_err(serde::de::Error::custom)
+    parse_hex_color(hex).map_err(serde::de::Error::custom)
+}
+
+fn parse_hex_color(hex: &str) -> Result<u32, String> {
+    match hex.len() {
+        6 => u32::from_str_radix(hex, 16).map_err(|err| err.to_string()),
+        8 => u32::from_str_radix(hex, 16)
+            .map(|rgba| rgba >> 8)
+            .map_err(|err| err.to_string()),
+        _ => Err(format!(
+            "expected 6 or 8 hex digits for color, got {}",
+            hex.len()
+        )),
+    }
 }
 
 fn default_config_path() -> Option<PathBuf> {
@@ -200,7 +213,7 @@ fn default_config_path() -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Config, MatchField, MatchMode};
+    use super::{parse_hex_color, Config, MatchField, MatchMode};
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -262,5 +275,16 @@ background = "#112233"
         assert_eq!(config.placeholder, "type");
         assert_eq!(config.message, "hello");
         assert_eq!(config.colors.background, 0x112233);
+    }
+
+    #[test]
+    fn color_parser_supports_rgb_and_rgba() {
+        assert_eq!(parse_hex_color("112233").unwrap(), 0x00112233);
+        assert_eq!(parse_hex_color("11223344").unwrap(), 0x00112233);
+    }
+
+    #[test]
+    fn color_parser_rejects_invalid_lengths() {
+        assert!(parse_hex_color("12345").is_err());
     }
 }

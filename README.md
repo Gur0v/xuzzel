@@ -1,6 +1,6 @@
 # xuzzel
 
-`xuzzel` is a X11 application launcher inspired by
+`xuzzel` is a work in progress X11 application launcher inspired by
 [`fuzzel`](https://codeberg.org/dnkl/fuzzel).
 
 Current features:
@@ -58,6 +58,23 @@ Missing or planned:
 - broader UTF-8, emoji, IME, and clipboard/paste parity
 - multi-monitor placement logic closer to `fuzzel`
 - more aggressive performance work for huge lists
+
+## Current Limitations
+
+- the X11 renderer still has visual artifacting during some redraws and selection changes
+- text, icon, and row compositing are not yet visually identical to `fuzzel`
+- border rendering is custom and still does not perfectly match `fuzzel`
+- rounded corners and border drawing are implemented, but edge quality and spacing still need work
+- some window managers may still handle focus and raise behavior inconsistently
+- key handling is still much simpler than `fuzzel`, especially for editing and custom bindings
+- `font` uses Fontconfig-style family descriptions, not direct `.ttf` or `.otf` file paths
+- color theming now loads correctly from config, but full theming parity is still incomplete
+- the renderer is still a hand-built X11/Cairo/Pango path rather than a mature scene graph or upstream-equivalent pipeline
+- desktop entry support is incomplete compared to `fuzzel`, especially around actions, localization, and environment-specific filtering
+- `dmenu` compatibility is useful but not complete, and Rofi protocol support is still missing
+- UTF-8, emoji, IME, clipboard, and paste behavior are not yet at `fuzzel` parity
+- there is no exact monitor-placement logic or scaling behavior equivalent to Wayland `fuzzel`
+- runtime performance has not yet been optimized for very large input sets to the same degree as `fuzzel`
 
 ## Build
 
