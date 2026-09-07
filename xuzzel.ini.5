@@ -1,0 +1,37 @@
+.TH XUZZEL.INI 5 "September 2026" "xuzzel 1.15.0-x11.1"
+.SH NAME
+xuzzel.ini \- xuzzel configuration
+.SH DESCRIPTION
+INI file with key=value pairs. Main settings may be unsectioned or under [main]. [colors], [border], and [dmenu] are accepted. Unknown keys produce warnings during normal loading and --check-config.
+.SH MAIN KEYS
+font, prompt, placeholder, message, terminal, launch-prefix, output, anchor, icon-theme, fields, lines, width, tabs, horizontal-pad, vertical-pad, inner-pad, line-height, letter-spacing, x-margin, y-margin, icons-enabled, use-bold, minimal-lines, hide-prompt, hide-before-typing, match-counter, no-sort, sort-result, enable-mouse, auto-select, match-mode.
+.PP
+sort-result=yes enables score/history sorting; sort-result=no preserves source order. no-sort=yes is the compatibility inverse. enable-mouse=no disables pointer handling and ButtonPress event subscription.
+.PP
+Compatibility keys without a complete X11 implementation are accepted: namespace, dpi-aware, scaling-filter, layer, exit-on-keyboard-focus-loss, image-size-ratio, icon-size, match-fields, match-workers, delayed-filter-ms, delayed-filter-limit, render-workers, selection-radius, list-executables-in-path, fuzzy-min-length, fuzzy-max-length-discrepancy, fuzzy-max-distance, show-actions, filter-desktop, password-character, default-mode, include. Physically unsupported gamma-correct blending and unimplemented message-mode are not accepted.
+.SH COLORS
+Values are RRGGBB, #RRGGBB, or RRGGBBAA. Alpha is accepted but ignored. Keys: background, text, prompt, placeholder, input, match, selection, selection-text, selection-match, counter, border, message.
+.SH EXAMPLE
+.nf
+[main]
+font=monospace:size=12
+prompt=> 
+lines=12
+width=40
+match-mode=fzf
+anchor=center
+
+[colors]
+background=1e1e2e
+text=d9e0ee
+selection=cba6f7
+selection-text=1e1e2e
+border=cba6f7
+
+[border]
+width=2
+.fi
+.SH FILES
+$XDG_CONFIG_HOME/fuzzel/fuzzel.ini, $XDG_CONFIG_HOME/xuzzel/xuzzel.ini, ~/.config/fuzzel/fuzzel.ini, ~/.config/xuzzel/xuzzel.ini, and equivalent files under $XDG_CONFIG_DIRS. First readable file wins.
+.SH SEE ALSO
+.BR xuzzel (1)

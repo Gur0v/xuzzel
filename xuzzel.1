@@ -1,0 +1,126 @@
+.TH XUZZEL 1 "September 2026" "xuzzel 1.15.0-x11.1"
+.SH NAME
+xuzzel \- X11 application launcher and dmenu
+.SH SYNOPSIS
+.B xuzzel
+.RI [ options ]
+.SH DESCRIPTION
+.B xuzzel
+is an X11 launcher and picker retaining dmenu's Xlib/Xft drawing and event-loop foundation. In launcher mode it discovers freedesktop desktop entries. With
+.B --dmenu
+it reads newline-delimited choices from standard input and writes the selected choice to standard output.
+.PP
+Command-line and configuration names track fuzzel 1.15.0 where an X11 equivalent exists. Command-line values override configuration. This is an independent X11 program and installs no fuzzel alias.
+.SH OPTIONS
+.TP
+.BR -d , " --dmenu"
+Dmenu mode.
+.TP
+.B --dmenu0
+Dmenu mode with NUL-separated input.
+.TP
+.BI --config= PATH
+Use configuration file. /dev/null disables configuration.
+.TP
+.B --check-config
+Validate configuration and exit.
+.TP
+.BI --override= [SECTION.]KEY=VALUE
+Override a configuration value. May be repeated.
+.TP
+.BR -f , " --font=" FONT
+Fontconfig font description.
+.TP
+.BR -p , " --prompt=" TEXT
+Prompt text.
+.TP
+.BI --placeholder= TEXT
+Placeholder is available through the configuration file.
+.TP
+.BR -l , " --lines=" N
+Maximum result rows.
+.TP
+.BR -w , " --width=" N
+Width, measured approximately in line-height units.
+.TP
+.BR -a , " --anchor=" POSITION
+One of center, top, bottom, left, right and combinations such as top-left.
+.TP
+.BR -o , " --output=" OUTPUT
+X11 equivalent: numeric Xinerama monitor index. Named Wayland outputs are accepted but cannot be resolved.
+.TP
+.BI --match-mode= MODE
+exact, fzf, or fuzzy. fuzzy currently uses the fzf subsequence scorer.
+.TP
+.BR -D , " --dpi-aware=" MODE
+Accepted. Xft/fontconfig and X server DPI determine scaling.
+.TP
+.B --password[=CHAR]
+Hide entered text using bullets, or an ASCII asterisk when a character is supplied.
+.TP
+.BI --select= TEXT
+Initially select exact display text.
+.TP
+.BI --select-index= INDEX
+Initially select zero-based index.
+.TP
+.B --minimal-lines
+Shrink result area to result count.
+.TP
+.B --hide-prompt
+Hide prompt.
+.TP
+.B --hide-before-typing
+Hide result rows until input exists.
+.TP
+.B --counter
+Show match/total counter.
+.TP
+.B --auto-select
+Accept automatically when exactly one result exists.
+.TP
+.B --no-sort
+Keep source order. Equivalent to sort-result=no in configuration.
+.TP
+.B --no-mouse
+Disable pointer selection and ButtonPress event subscription. Equivalent to enable-mouse=no in configuration.
+.TP
+.BI --search= TEXT
+Initial search text.
+.TP
+.BI --cache= PATH
+History path. Dmenu mode only uses history when explicitly set.
+.TP
+.BI --launch-prefix= COMMAND
+Prefix launcher commands.
+.TP
+.B --index
+Print zero-based input index rather than selected text in dmenu mode.
+.TP
+.BR -b , " --background-color=" RRGGBB[AA]
+Set background. Alpha is accepted but ignored by default X11 visual.
+.TP
+.BR -t , " --text-color=" RRGGBB[AA]
+Set result text color. The prompt/input/match/selection/counter/border color options from fuzzel 1.15.0 are also accepted.
+.TP
+.BR -B , " --border-width=" N
+Border width.
+.TP
+.BR -h , " --help"
+Print help.
+.TP
+.BR -v , " --version"
+Print version.
+.SH INPUT
+Enter accepts selection. Shift+Enter accepts typed text. Escape exits 1. Up/Down and PageUp/PageDown navigate. Tab inserts selection. Ctrl+A/E/B/F/P/N/H/D/U/K/W and Ctrl+V provide Emacs-style editing and clipboard paste.
+.SH CONFIGURATION
+Search order is $XDG_CONFIG_HOME/fuzzel/fuzzel.ini, then $XDG_CONFIG_HOME/xuzzel/xuzzel.ini, corresponding paths below each $XDG_CONFIG_DIRS entry, with ~/.config used when XDG_CONFIG_HOME is unset. See xuzzel.ini(5).
+.SH EXIT STATUS
+0 on selection or successful validation, 1 on cancellation, greater than zero on errors.
+.SH LIMITATIONS
+Wayland-only layer, namespace, output naming, focus-loss protocol behavior, fractional protocol scaling, IME protocol, transparency/blur, gamma-correct blending, rounded clipping, action submenus, and startup-notification semantics have no exact X11 equivalent. Icons and SVG rendering are not yet drawn. Messages occupy one clipped row; message-mode wrapping/expansion is not implemented or accepted.
+.SH ATTRIBUTION
+Drawing and event-loop structure derive from dmenu 5.4, Copyright 2006-2024 suckless.org, under the repository LICENSE. Fuzzel 1.15.0 manuals and behavior were used as compatibility references; no fuzzel source is incorporated.
+.SH SEE ALSO
+.BR xuzzel.ini (5),
+.BR dmenu (1)

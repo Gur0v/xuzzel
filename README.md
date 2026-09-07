@@ -1,100 +1,67 @@
 # xuzzel
 
-`xuzzel` is a X11 application launcher inspired by
-[`fuzzel`](https://codeberg.org/dnkl/fuzzel).
+Fast X11 application launcher and dmenu-style picker built on dmenu 5.4's Xlib/Xft foundation. It aims to provide fuzzel 1.15-compatible behavior and configuration where X11 has a sensible equivalent.
 
-Current features:
-
-- `.desktop` launcher discovery
-- fuzzy matching
-- launch history
-- `dmenu` mode
-- X11 popup UI
-- desktop icons
-- TOML config
-
-## Status
-
-Completed:
-
-- X11 popup window with floating/above-window hints
-- keyboard-driven filtering and selection
-- mouse selection and scroll wheel navigation
-- rounded window radius via the X Shape extension
-- `.desktop` launcher discovery from XDG application directories
-- launch history cache
-- freedesktop icon lookup and rendering
-- TOML-based config loading
-- Fontconfig-style font selection through Pango/Cairo
-- `dmenu` mode with newline or NUL-separated input
-- `dmenu` options like `--index`, `--password`, `--minimal-lines`,
-  `--with-nth`, `--accept-nth`, and `--match-nth`
-- configurable colors, sizing, padding, prompt, placeholder, and counter
-
-Partially complete:
-
-- visual parity with `fuzzel`
-- keybinding parity with `fuzzel`
-- `.desktop` execution fidelity
-- `dmenu` compatibility
-- window manager focus behavior
-
-Missing or planned:
-
-- exact `fuzzel` layout and font metrics
-- exact border rendering to match rounded corners
-- message wrapping and more exact text layout behavior
-- full `fuzzel.ini` keybinding coverage
-- richer text editing behavior
-- desktop actions support
-- filtering based on `OnlyShowIn` and `NotShowIn`
-- localized `.desktop` strings
-- startup notification support
-- launch prefix support
-- listing executables from `$PATH`
-- execute-input behavior outside current partial support
-- Rofi icon protocol support in `dmenu` mode
-- optional large icon preview for small result sets
-- broader UTF-8, emoji, IME, and clipboard/paste parity
-- multi-monitor placement logic closer to `fuzzel`
-- more aggressive performance work for huge lists
+Xuzzel runs as a centered override-redirect window, supports keyboard and mouse control, and closes when clicking outside it. Launcher mode discovers freedesktop desktop entries; dmenu mode reads choices from standard input and prints the selected value.
 
 ## Build
 
-```sh
-cargo build --release
-```
+Dependencies: C99 compiler, pkg-config, Xlib, Xft/fontconfig, Xinerama.
 
-`xuzzel` links against `libX11`, which must be installed on the target system.
+    make
+    make check
+    ./xuzzel
+    printf 'one\ntwo\n' | ./xuzzel --dmenu
 
-## Run
+Install with `make install PREFIX=/usr/local`. This installs the binary, man pages, desktop entry, and example configuration. Use `make uninstall PREFIX=/usr/local` to remove them.
 
-```sh
-./target/release/xuzzel
-```
+## Usage
 
-To use stdin mode:
+Run as an application launcher:
 
-```sh
-printf 'firefox\nfoot\nthunderbird\n' | ./target/release/xuzzel --dmenu
-```
+    xuzzel
 
-## Config
+Use it as a picker:
 
-`xuzzel` looks for config in:
+    printf 'shutdown\nreboot\ncancel\n' | xuzzel --dmenu --prompt='Power: '
 
-- `$XDG_CONFIG_HOME/xuzzel/xuzzel.toml`
-- `~/.config/xuzzel/xuzzel.toml`
+Useful references:
 
-`font` now uses a Fontconfig-style font description, for example
-`monospace`, `Iosevka 11`, or `JetBrains Mono 10`.
+    man xuzzel
+    man xuzzel.ini
+    xuzzel --help
 
-## Roadmap
+Escape or an outside click cancels with status 1. Enter accepts the selected entry. Arrow keys, Page Up/Down, mouse wheel, and pointer selection navigate results.
 
-- finish visual parity with `fuzzel`
-- finish feature parity with `fuzzel`
-- keep the X11/Rust implementation fast and maintainable
+## Configuration
+
+`xuzzel.ini` mirrors fuzzel 1.15.0 defaults with Wayland-only settings removed. Copy it to `~/.config/xuzzel/xuzzel.ini` to customize it. Installation puts an untouched example in `share/doc/xuzzel/xuzzel.ini` rather than overriding user configuration.
+
+Configuration lookup prefers `fuzzel/fuzzel.ini`, then `xuzzel/xuzzel.ini`, under `$XDG_CONFIG_HOME`, `~/.config`, and `$XDG_CONFIG_DIRS`. Command-line options override file values. Validate configuration without opening a window using:
+
+    xuzzel --check-config
+
+## Implemented
+
+- XDG desktop discovery, launch, terminal entries, hidden/no-display handling
+- dmenu stdin/stdout, prompt/password/search/select/auto-select modes
+- fzf-style subsequence and exact matching, source-order mode
+- persistent launcher history under XDG cache
+- fuzzel/xuzzel INI search, validation and command-line overrides
+- fuzzel 1.15 short/long option-name surface, NUL input, index output
+- Xft/fontconfig rendering, keyboard/mouse editing, mouse-disable configuration, clipboard paste
+- outside-click cancellation with pointer cleanup
+- Xinerama monitor index, anchors/margins, server/Xft DPI behavior
+- colors, spacing, borders, sorted/source-order results, match counter, minimal/hide modes
+
+## Known gaps
+
+X11 has no exact layer-shell, namespace, compositor-output-name, Wayland IME, fractional-scale protocol, blur, gamma-correct Xft blending, or keyboard-focus-loss equivalent. Alpha, rounded clipping, action menus, icon/SVG drawing, desktop actions, message wrapping/expansion, and full Damerau-Levenshtein fuzzy mode remain incomplete. Compatibility-only options are accepted where documented by `xuzzel(1)`.
 
 ## License
 
-See [LICENSE](/home/gurov/Projects/xuzzel/LICENSE:1).
+MIT/X Consortium license. Drawing primitives and event-loop design retain dmenu attribution. Fuzzel source is not copied; its documented behavior and configuration define compatibility goals. See `LICENSE`.
+
+## License and attribution
+
+See `LICENSE`. Drawing primitives and event-loop design retain dmenu 5.4 lineage and notices (Copyright 2006-2024 suckless.org). Fuzzel source is not copied; 1.15.0 manuals and behavior define compatibility goals.

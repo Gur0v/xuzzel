@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Xuzzel
+GenericName=Application Launcher
+Comment=Launch applications on X11
+Exec=xuzzel
+Icon=system-run
+Terminal=false
+Categories=Utility;
+Keywords=launcher;menu;run;
