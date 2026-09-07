@@ -40,7 +40,7 @@
 
 #define VERSION "1.15.0-x11.1"
 #define TEXTSZ 4096
-#define TEXTW(s) (drw_fontset_getwidth(drw, (s)) + cfg.inner_pad * 2)
+#define TEXTW(s) (drw_fontset_getwidth(drw, (s)))
 
 enum { SchemeNorm, SchemePrompt, SchemeInput, SchemeMatch, SchemeSel,
        SchemeSelMatch, SchemeCounter, SchemeBorder, SchemeLast };
@@ -190,7 +190,16 @@ static bool apply_key(const char *section, const char *key, const char *v, bool 
             !strcmp(key,"counter") ? SchemeCounter : !strcmp(key,"border") ? SchemeBorder : -1;
         if (sc >= 0) {
             int which = !strcmp(key,"background") || !strcmp(key,"selection") ? 1 : 0;
-            setcolor(sc,which,v);
+            if (!strcmp(key,"background")) {
+                setcolor(SchemeNorm,1,v);
+                setcolor(SchemePrompt,1,v);
+                setcolor(SchemeInput,1,v);
+                setcolor(SchemeMatch,1,v);
+                setcolor(SchemeCounter,1,v);
+                setcolor(SchemeBorder,1,v);
+            } else {
+                setcolor(sc,which,v);
+            }
             if (!strcmp(key,"selection")) setcolor(SchemeSelMatch,1,v);
             return true;
         }
@@ -379,21 +388,21 @@ static void insert(const char *str,ssize_t n){if(strlen(text)+n>=sizeof text-1)n
 
 static void draw_highlight(const char *s,int x,int y,int w,bool sel)
 {
-    drw_setscheme(drw,scheme[sel?SchemeSel:SchemeNorm]);drw_text(drw,x,y,w,bh,cfg.inner_pad,s,0);
+    drw_setscheme(drw,scheme[sel?SchemeSel:SchemeNorm]);drw_text(drw,x,y,w,bh,0,s,0);
     if(!*text)return;
-    char *low=xstrdup(s),*needle=xstrdup(text);for(char*p=low;*p;p++)*p=tolower((unsigned char)*p);for(char*p=needle;*p;p++)*p=tolower((unsigned char)*p);char *p=strstr(low,needle);if(p){size_t pre=(size_t)(p-low),n=strlen(needle);char save=((char*)s)[pre];char *prefix=xstrdup(s);prefix[pre]='\0';int px=x+cfg.inner_pad+(int)drw_fontset_getwidth(drw,prefix);free(prefix);char *hit=xstrdup(s+pre);hit[n]='\0';int pw=(int)drw_fontset_getwidth(drw,hit);drw_setscheme(drw,scheme[sel?SchemeSelMatch:SchemeMatch]);drw_text(drw,px,y,pw,bh,0,hit,0);(void)save;free(hit);}free(low);free(needle);
+    char *low=xstrdup(s),*needle=xstrdup(text);for(char*p=low;*p;p++)*p=tolower((unsigned char)*p);for(char*p=needle;*p;p++)*p=tolower((unsigned char)*p);char *p=strstr(low,needle);if(p){size_t pre=(size_t)(p-low),n=strlen(needle);char save=((char*)s)[pre];char *prefix=xstrdup(s);prefix[pre]='\0';int px=x+(int)drw_fontset_getwidth(drw,prefix);free(prefix);char *hit=xstrdup(s+pre);hit[n]='\0';int pw=(int)drw_fontset_getwidth(drw,hit);drw_setscheme(drw,scheme[sel?SchemeSelMatch:SchemeMatch]);drw_text(drw,px,y,pw,bh,0,hit,0);(void)save;free(hit);}free(low);free(needle);
 }
 static void drawmenu(void)
 {
-    int x=cfg.border_width+cfg.hpad,y=cfg.border_width+cfg.vpad,w=mw-2*(cfg.border_width+cfg.hpad),promptw=0;
+    int x=cfg.hpad,y=cfg.vpad,w=mw-2*cfg.hpad,promptw=0;
     drw_setscheme(drw,scheme[SchemeNorm]);drw_rect(drw,0,0,mw,mh,1,1);
-    if(cfg.border_width){drw_setscheme(drw,scheme[SchemeBorder]);drw_rect(drw,0,0,mw,cfg.border_width,1,0);drw_rect(drw,0,mh-cfg.border_width,mw,cfg.border_width,1,0);drw_rect(drw,0,0,cfg.border_width,mh,1,0);drw_rect(drw,mw-cfg.border_width,0,cfg.border_width,mh,1,0);}
-    if(message){drw_setscheme(drw,scheme[SchemePrompt]);drw_text(drw,x,y,w,bh,cfg.inner_pad,message,0);y+=bh;}
-    if(!cfg.hide_prompt&&cfg.prompt&&*cfg.prompt){promptw=TEXTW(cfg.prompt);drw_setscheme(drw,scheme[SchemePrompt]);drw_text(drw,x,y,promptw,bh,cfg.inner_pad,cfg.prompt,0);}
+    if(message){drw_setscheme(drw,scheme[SchemePrompt]);drw_text(drw,x,y,w,bh,0,message,0);y+=bh;}
+    if(!cfg.hide_prompt&&cfg.prompt&&*cfg.prompt){promptw=TEXTW(cfg.prompt);drw_setscheme(drw,scheme[SchemePrompt]);drw_text(drw,x,y,promptw,bh,0,cfg.prompt,0);}
     char shown[TEXTSZ];const char *input=text;if(cfg.password&&*text){size_t n=strlen(text),j=0;const char *bullet=cfg.password_char?"*":"•";shown[0]='\0';while(j+strlen(bullet)<sizeof shown&&n--){strcat(shown,bullet);j+=strlen(bullet);}input=shown;}else if(!*text&&cfg.placeholder)input=cfg.placeholder;
-    drw_setscheme(drw,scheme[SchemeInput]);drw_text(drw,x+promptw,y,w-promptw,bh,cfg.inner_pad,input,0);y+=bh;
+    drw_setscheme(drw,scheme[SchemeInput]);drw_text(drw,x+promptw,y,w-promptw,bh,0,input,0);y+=bh;
+    if(cfg.lines>0&&!(cfg.hide_before_typing&&!*text))y+=cfg.inner_pad;
     if(!(cfg.hide_before_typing&&!*text)){size_t shown_n=MIN((size_t)cfg.lines,match_count-first);for(size_t k=0;k<shown_n;k++){size_t i=first+k;draw_highlight(matches[i]->text,x,y,w,i==selected);y+=bh;}}
-    if(cfg.counter){char b[64];snprintf(b,sizeof b,"%zu/%zu",match_count,item_count);int cw=TEXTW(b);drw_setscheme(drw,scheme[SchemeCounter]);drw_text(drw,mw-cfg.border_width-cfg.hpad-cw,cfg.border_width+cfg.vpad,cw,bh,cfg.inner_pad,b,0);}
+    if(cfg.counter){char b[64];snprintf(b,sizeof b,"%zu/%zu",match_count,item_count);int cw=TEXTW(b);drw_setscheme(drw,scheme[SchemeCounter]);drw_text(drw,mw-cfg.hpad-cw,cfg.vpad,cw,bh,0,b,0);}
     drw_map(drw,win,0,0,mw,mh);
 }
 
@@ -411,26 +420,35 @@ static void keypress(XKeyEvent *ev)
     if(ctrl){if(ksym==XK_a)ksym=XK_Home;else if(ksym==XK_e)ksym=XK_End;else if(ksym==XK_b)ksym=XK_Left;else if(ksym==XK_f)ksym=XK_Right;else if(ksym==XK_p)ksym=XK_Up;else if(ksym==XK_n)ksym=XK_Down;else if(ksym==XK_h)ksym=XK_BackSpace;else if(ksym==XK_d)ksym=XK_Delete;else if(ksym==XK_u){insert(NULL,-(ssize_t)cursor);drawmenu();return;}else if(ksym==XK_k){text[cursor]='\0';match_items();drawmenu();return;}else if(ksym==XK_w){size_t old=cursor;while(cursor&&isspace((unsigned char)text[cursor-1]))cursor=nextrune(-1);while(cursor&&!isspace((unsigned char)text[cursor-1]))cursor=nextrune(-1);memmove(text+cursor,text+old,strlen(text+old)+1);match_items();drawmenu();return;}else if(ksym==XK_v){paste();return;}else if(ksym==XK_c){cleanup();exit(1);}}
     switch(ksym){case XK_Escape:cleanup();exit(1);case XK_Return:case XK_KP_Enter:accept(shift);break;case XK_BackSpace:if(cursor)insert(NULL,(ssize_t)nextrune(-1)-(ssize_t)cursor);break;case XK_Delete:if(text[cursor]){size_t n=nextrune(1);memmove(text+cursor,text+n,strlen(text+n)+1);match_items();}break;case XK_Left:if(cursor)cursor=nextrune(-1);break;case XK_Right:if(text[cursor])cursor=nextrune(1);break;case XK_Home:cursor=0;break;case XK_End:cursor=strlen(text);break;case XK_Up:if(selected){selected--;if(selected<first)first=selected;}break;case XK_Down:if(selected+1<match_count){selected++;if(selected>=first+(size_t)cfg.lines)first++;}break;case XK_Page_Up:selected=selected>(size_t)cfg.lines?selected-cfg.lines:0;first=selected;break;case XK_Page_Down:selected=MIN(match_count?match_count-1:0,selected+(size_t)cfg.lines);first=selected;break;case XK_Tab:if(match_count){snprintf(text,sizeof text,"%s",matches[selected]->text);cursor=strlen(text);match_items();}break;default:if(!ctrl&&len&&!(ev->state&Mod1Mask))insert(buf,len);break;}drawmenu();
 }
-static void buttonpress(XButtonEvent *e){if(cfg.no_mouse)return;if(e->button==Button4){if(selected)selected--;}else if(e->button==Button5){if(selected+1<match_count)selected++;}else if(e->button==Button1){int row=(e->y-cfg.border_width-cfg.vpad)/bh-1-(message?1:0);if(row>=0&&first+(size_t)row<match_count){selected=first+(size_t)row;accept(false);}}drawmenu();}
+static void buttonpress(XButtonEvent *e){if(cfg.no_mouse)return;if(e->button==Button4){if(selected)selected--;}else if(e->button==Button5){if(selected+1<match_count)selected++;}else if(e->button==Button1){int list_y=cfg.vpad+bh*(1+(message?1:0))+cfg.inner_pad;int row=(e->y-list_y)/bh;if(e->y>=list_y&&row>=0&&first+(size_t)row<match_count){selected=first+(size_t)row;accept(false);}}drawmenu();}
 
 static void setup(void)
 {
     XSetWindowAttributes swa;XIM xim;XWindowAttributes wa;
     screen=DefaultScreen(dpy);root=RootWindow(dpy,screen);XGetWindowAttributes(dpy,root,&wa);sw=wa.width;sh=wa.height;
-    drw=drw_create(dpy,screen,root,sw,sh);Fnt *fonts=drw_fontset_create(drw,(const char**)&cfg.font,1);if(!fonts)die("xuzzel: cannot load font %s",cfg.font);drw_setfontset(drw,fonts);bh=cfg.line_height?cfg.line_height:(int)drw->fonts->h+cfg.inner_pad*2;
-    int visible=cfg.lines;if(cfg.minimal_lines)visible=MIN(visible,(int)match_count);mh=2*(cfg.border_width+cfg.vpad)+bh*(1+visible+(message?1:0));
+    drw=drw_create(dpy,screen,root,sw,sh);Fnt *fonts=drw_fontset_create(drw,(const char**)&cfg.font,1);if(!fonts)die("xuzzel: cannot load font %s",cfg.font);drw_setfontset(drw,fonts);bh=cfg.line_height?cfg.line_height:(int)drw->fonts->h;
+    int visible=cfg.lines;if(cfg.minimal_lines)visible=MIN(visible,(int)match_count);int gap=visible>0?cfg.inner_pad:0;mh=2*cfg.vpad+bh*(1+visible+(message?1:0))+gap;
     int char_width=(int)drw_fontset_getwidth(drw,"o")+cfg.letter_spacing;
     if(char_width<0)char_width=0;
-    mw=cfg.width*char_width+2*(cfg.border_width+cfg.hpad);mw=MIN(mw,sw-2*cfg.x_margin);mh=MIN(mh,sh-2*cfg.y_margin);
-    int x=(sw-mw)/2,y=(sh-mh)/2;if(strstr(cfg.anchor,"left"))x=cfg.x_margin;if(strstr(cfg.anchor,"right"))x=sw-mw-cfg.x_margin;if(strstr(cfg.anchor,"top"))y=cfg.y_margin;if(strstr(cfg.anchor,"bottom"))y=sh-mh-cfg.y_margin;
+    mw=cfg.width*char_width+2*cfg.hpad;mw=MIN(mw,sw-2*(cfg.x_margin+cfg.border_width));mh=MIN(mh,sh-2*(cfg.y_margin+cfg.border_width));
+    int outer_w=mw+2*cfg.border_width,outer_h=mh+2*cfg.border_width;
+    int x=(sw-outer_w)/2,y=(sh-outer_h)/2;if(strstr(cfg.anchor,"left"))x=cfg.x_margin;if(strstr(cfg.anchor,"right"))x=sw-outer_w-cfg.x_margin;if(strstr(cfg.anchor,"top"))y=cfg.y_margin;if(strstr(cfg.anchor,"bottom"))y=sh-outer_h-cfg.y_margin;
 #ifdef XINERAMA
-    if(XineramaIsActive(dpy)){int n;XineramaScreenInfo*si=XineramaQueryScreens(dpy,&n);int m=cfg.monitor>=0?MIN(cfg.monitor,n-1):0;if(si){x=si[m].x_org+(si[m].width-mw)/2;y=si[m].y_org+(si[m].height-mh)/2;if(strstr(cfg.anchor,"left"))x=si[m].x_org+cfg.x_margin;if(strstr(cfg.anchor,"right"))x=si[m].x_org+si[m].width-mw-cfg.x_margin;if(strstr(cfg.anchor,"top"))y=si[m].y_org+cfg.y_margin;if(strstr(cfg.anchor,"bottom"))y=si[m].y_org+si[m].height-mh-cfg.y_margin;XFree(si);}}
+    if(XineramaIsActive(dpy)){int n;XineramaScreenInfo*si=XineramaQueryScreens(dpy,&n);int m=cfg.monitor>=0?MIN(cfg.monitor,n-1):0;if(si){x=si[m].x_org+(si[m].width-outer_w)/2;y=si[m].y_org+(si[m].height-outer_h)/2;if(strstr(cfg.anchor,"left"))x=si[m].x_org+cfg.x_margin;if(strstr(cfg.anchor,"right"))x=si[m].x_org+si[m].width-outer_w-cfg.x_margin;if(strstr(cfg.anchor,"top"))y=si[m].y_org+cfg.y_margin;if(strstr(cfg.anchor,"bottom"))y=si[m].y_org+si[m].height-outer_h-cfg.y_margin;XFree(si);}}
 #endif
     for(int i=0;i<SchemeLast;i++)scheme[i]=drw_scm_create(drw,(const char**)cfg.colors[i],2);
-    swa.override_redirect=True;swa.background_pixel=BlackPixel(dpy,screen);
+    swa.override_redirect=True;swa.background_pixel=scheme[SchemeNorm][ColBg].pixel;swa.border_pixel=scheme[SchemeBorder][ColFg].pixel;
     swa.event_mask=ExposureMask|KeyPressMask|FocusChangeMask;
     if(!cfg.no_mouse)swa.event_mask|=ButtonPressMask;
-    win=XCreateWindow(dpy,root,x,y,mw,mh,0,CopyFromParent,CopyFromParent,CopyFromParent,CWOverrideRedirect|CWBackPixel|CWEventMask,&swa);XStoreName(dpy,win,"xuzzel");
+    win=XCreateWindow(dpy,root,x,y,mw,mh,cfg.border_width,CopyFromParent,CopyFromParent,CopyFromParent,CWOverrideRedirect|CWBackPixel|CWBorderPixel|CWEventMask,&swa);XStoreName(dpy,win,"xuzzel");
+    Atom window_type=XInternAtom(dpy,"_NET_WM_WINDOW_TYPE",False);
+    Atom utility_type=XInternAtom(dpy,"_NET_WM_WINDOW_TYPE_UTILITY",False);
+    XChangeProperty(dpy,win,window_type,XA_ATOM,32,PropModeReplace,
+                    (unsigned char*)&utility_type,1);
+    struct { unsigned long flags,functions,decorations,input_mode,status; } motif={2,0,0,0,0};
+    Atom motif_hints=XInternAtom(dpy,"_MOTIF_WM_HINTS",False);
+    XChangeProperty(dpy,win,motif_hints,motif_hints,32,PropModeReplace,
+                    (unsigned char*)&motif,5);
     XClassHint ch={"xuzzel","xuzzel"};XSetClassHint(dpy,win,&ch);XMapRaised(dpy,win);XSetInputFocus(dpy,win,RevertToParent,CurrentTime);
     xim=XOpenIM(dpy,NULL,NULL,NULL);if(xim)xic=XCreateIC(xim,XNInputStyle,XIMPreeditNothing|XIMStatusNothing,XNClientWindow,win,XNFocusWindow,win,NULL);
     utf8=XInternAtom(dpy,"UTF8_STRING",False);clip=XInternAtom(dpy,"CLIPBOARD",False);targets=XInternAtom(dpy,"TARGETS",False);(void)targets;
