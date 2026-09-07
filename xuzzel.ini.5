@@ -4,11 +4,13 @@ xuzzel.ini \- xuzzel configuration
 .SH DESCRIPTION
 INI file with key=value pairs. Main settings may be unsectioned or under [main]. [colors], [border], and [dmenu] are accepted. Unknown keys produce warnings during normal loading and --check-config.
 .SH MAIN KEYS
-font, prompt, placeholder, message, terminal, launch-prefix, output, anchor, icon-theme, fields, lines, width, tabs, horizontal-pad, vertical-pad, inner-pad, line-height, letter-spacing, x-margin, y-margin, icons-enabled, use-bold, minimal-lines, hide-prompt, hide-before-typing, match-counter, no-sort, sort-result, enable-mouse, auto-select, match-mode.
+font, prompt, placeholder, message, terminal, launch-prefix, output, anchor, icon-theme, icon-size, fields, lines, width, tabs, horizontal-pad, vertical-pad, inner-pad, line-height, letter-spacing, x-margin, y-margin, icons-enabled, use-bold, minimal-lines, hide-prompt, hide-before-typing, match-counter, no-sort, sort-result, enable-mouse, auto-select, match-mode.
 .PP
-sort-result=yes enables score/history sorting; sort-result=no preserves source order. no-sort=yes is the compatibility inverse. enable-mouse=no disables pointer handling and ButtonPress event subscription.
+sort-result=yes enables deterministic match-class, score/position/chunk, history, and source-order sorting; sort-result=no preserves source order. no-sort=yes is the compatibility inverse. enable-mouse=no disables pointer handling and ButtonPress event subscription. match-mode=fuzzy splits input on spaces case-insensitively, ranks exact substrings above typo matches, and uses ordinary Unicode-code-point Levenshtein substring distance. fuzzy-min-length, fuzzy-max-length-discrepancy, and fuzzy-max-distance control typo matching and default to 3, 2, and 1.
 .PP
-Compatibility keys without a complete X11 implementation are accepted: namespace, dpi-aware, scaling-filter, layer, exit-on-keyboard-focus-loss, image-size-ratio, icon-size, match-fields, match-workers, delayed-filter-ms, delayed-filter-limit, render-workers, selection-radius, list-executables-in-path, fuzzy-min-length, fuzzy-max-length-discrepancy, fuzzy-max-distance, show-actions, filter-desktop, password-character, default-mode, include. Physically unsupported gamma-correct blending and unimplemented message-mode are not accepted.
+icon-size sets launcher icon size in pixels; zero uses row height. Icons follow freedesktop theme inheritance through XDG data directories, hicolor, then pixmaps. Absolute PNG and SVG paths work.
+.PP
+Compatibility keys without a complete X11 implementation are accepted: namespace, dpi-aware, scaling-filter, layer, exit-on-keyboard-focus-loss, image-size-ratio, match-fields, match-workers, delayed-filter-ms, delayed-filter-limit, render-workers, selection-radius, list-executables-in-path, show-actions, filter-desktop, password-character, default-mode, include. Physically unsupported gamma-correct blending and unimplemented message-mode are not accepted.
 .SH COLORS
 Values are RRGGBB, #RRGGBB, or RRGGBBAA. Alpha is accepted but ignored. Keys: background, text, prompt, placeholder, input, match, selection, selection-text, selection-match, counter, border, message.
 .SH EXAMPLE

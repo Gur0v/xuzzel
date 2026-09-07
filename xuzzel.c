@@ -14,6 +14,7 @@
 #include <fcntl.h>
 #include <getopt.h>
 #include <locale.h>
+#include <limits.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -25,17 +26,21 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <wchar.h>
+#include <wctype.h>
 
 #include <X11/Xatom.h>
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <X11/keysym.h>
 #include <X11/Xft/Xft.h>
+#include <cairo/cairo-xlib.h>
 #ifdef XINERAMA
 #include <X11/extensions/Xinerama.h>
 #endif
 
 #include "drw.h"
+#include "icon.h"
 #include "util.h"
 
 #define VERSION "1.15.0-x11.1"
@@ -50,7 +55,7 @@ struct config {
     char *font, *prompt, *placeholder, *terminal, *launch_prefix;
     char *cache, *output, *anchor, *icon_theme, *fields;
     char *colors[SchemeLast][2];
-    int lines, width, tabs, hpad, vpad, inner_pad, border_width;
+    int lines, width, tabs, hpad, vpad, inner_pad, border_width, icon_size;
     int line_height, letter_spacing, monitor;
     int x_margin, y_margin, select_index;
     unsigned fuzzy_min, fuzzy_discrepancy, fuzzy_distance;
@@ -66,6 +71,8 @@ struct item {
     size_t input_index;
     unsigned history;
     int score;
+    unsigned match_class, match_pos, match_chunks;
+    bool word_boundary;
 };
 
 static struct config cfg;
@@ -160,6 +167,7 @@ static void defaults(void)
     cfg.fields = xstrdup("filename,name,generic");
     nth_delim = xstrdup("\t");
     cfg.lines = 15; cfg.width = 30; cfg.tabs = 8; cfg.hpad = 40; cfg.vpad = 8;
+    cfg.icon_size = 0;
     cfg.monitor = -1; cfg.select_index = -1; cfg.icons = true;
     cfg.fuzzy_min = 3; cfg.fuzzy_discrepancy = 2; cfg.fuzzy_distance = 1;
     cfg.match_mode = MATCH_FZF;
@@ -211,6 +219,7 @@ static bool apply_key(const char *section, const char *key, const char *v, bool 
     STR("font",font) STR("prompt",prompt) STR("placeholder",placeholder)
     STR("terminal",terminal) STR("launch-prefix",launch_prefix) STR("output",output)
     STR("anchor",anchor) STR("icon-theme",icon_theme) STR("fields",fields)
+    INT("icon-size",icon_size,0,4096)
     if (!strcmp(key,"message")) { setstr(&message,v); return true; }
     INT("lines",lines,0,100000) INT("width",width,1,100000) INT("tabs",tabs,1,64)
     INT("horizontal-pad",hpad,0,100000) INT("vertical-pad",vpad,0,100000)
@@ -239,6 +248,9 @@ static bool apply_key(const char *section, const char *key, const char *v, bool 
         else die("xuzzel: invalid match-mode: %s",v);
         return true;
     }
+    INT("fuzzy-min-length",fuzzy_min,0,100000)
+    INT("fuzzy-max-length-discrepancy",fuzzy_discrepancy,0,100000)
+    INT("fuzzy-max-distance",fuzzy_distance,0,100000)
     if (!strcmp(key,"background")) { setcolor(SchemeNorm,1,v); setcolor(SchemeInput,1,v); return true; }
     if (!strcmp(key,"text")) { setcolor(SchemeNorm,0,v); return true; }
     if (!strcmp(key,"prompt")) { setstr(&cfg.prompt,v); return true; }
@@ -254,9 +266,9 @@ static bool apply_key(const char *section, const char *key, const char *v, bool 
     if (!strcmp(key,"message")) { setcolor(SchemePrompt,0,v); return true; }
     /* Parsed but X11-inapplicable or not yet rendered. */
     const char *known[] = {"namespace","dpi-aware","scaling-filter","layer","exit-on-keyboard-focus-loss",
-        "image-size-ratio","icon-theme","icon-size","match-fields","match-counter","match-workers",
+        "image-size-ratio","icon-theme","match-fields","match-counter","match-workers",
         "delayed-filter-ms","delayed-filter-limit","render-workers","selection-radius",
-        "list-executables-in-path","fuzzy-min-length","fuzzy-max-length-discrepancy","fuzzy-max-distance",
+        "list-executables-in-path",
         "show-actions","filter-desktop","password-character","default-mode","include",NULL};
     for (int i=0; known[i]; i++) if (!strcmp(key,known[i])) return true;
     if (strict) fprintf(stderr,"xuzzel: warning: unknown key [%s] %s\n",section,key);
@@ -316,7 +328,7 @@ static char *field_select(const char *s, const char *spec)
 static void add_item(const char *display,const char *match,const char *exec,const char *icon,const char *id)
 {
     items=xrealloc(items,(item_count+1)*sizeof *items);
-    items[item_count]=(struct item){xstrdup(display),xstrdup(match?match:display),exec?xstrdup(exec):NULL,icon?xstrdup(icon):NULL,id?xstrdup(id):NULL,item_count,0,0}; item_count++;
+    items[item_count]=(struct item){.text=xstrdup(display),.match=xstrdup(match?match:display),.exec=exec?xstrdup(exec):NULL,.icon=icon?xstrdup(icon):NULL,.desktop_id=id?xstrdup(id):NULL,.input_index=item_count}; item_count++;
 }
 
 static void read_stdin_items(void)
@@ -374,10 +386,44 @@ static int fzf_score(const char *hay,const char *needle)
     int score=0,last=-2;size_t j=0;for(int i=0;hay[i]&&needle[j];i++)if(tolower((unsigned char)hay[i])==tolower((unsigned char)needle[j])){score+=10;if(i==last+1)score+=15;if(i==0||strchr(" /_-.",hay[i-1]))score+=20;score-=i/8;last=i;j++;}return needle[j]?-100000:score;
 }
 static int exact_score(const char*h,const char*n){if(!*n)return 0;char *hl=xstrdup(h),*nl=xstrdup(n);for(char*p=hl;*p;p++)*p=tolower((unsigned char)*p);for(char*p=nl;*p;p++)*p=tolower((unsigned char)*p);char*q=strstr(hl,nl);int r=q?1000-(int)(q-hl):-100000;free(hl);free(nl);return r;}
-static int cmp_match(const void*a,const void*b){const struct item*x=*(const struct item*const*)a,*y=*(const struct item*const*)b;if(!cfg.no_sort){if(x->score!=y->score)return y->score-x->score;if(x->history!=y->history)return y->history>x->history?1:-1;}return x->input_index>y->input_index?1:-1;}
+
+static wchar_t *lower_wide(const char *s,size_t *len)
+{
+    size_t cap=strlen(s)+1,n=0;wchar_t *out=ecalloc(cap,sizeof *out);mbstate_t st={0};
+    while(*s){wchar_t wc;size_t z=mbrtowc(&wc,s,MB_CUR_MAX,&st);if(z==(size_t)-1||z==(size_t)-2){memset(&st,0,sizeof st);wc=(unsigned char)*s;z=1;}else if(z==0)break;out[n++]=towlower(wc);s+=z;}
+    out[n]=L'\0';*len=n;return out;
+}
+static unsigned levenshtein(const wchar_t *a,size_t alen,const wchar_t *b,size_t blen)
+{
+    unsigned *prev=ecalloc(blen+1,sizeof *prev),*cur=ecalloc(blen+1,sizeof *cur);
+    for(size_t j=0;j<=blen;j++)prev[j]=(unsigned)j;
+    for(size_t i=1;i<=alen;i++){cur[0]=(unsigned)i;for(size_t j=1;j<=blen;j++){unsigned del=prev[j]+1,ins=cur[j-1]+1,sub=prev[j-1]+(a[i-1]!=b[j-1]);cur[j]=del<ins?del:ins;if(sub<cur[j])cur[j]=sub;}unsigned *tmp=prev;prev=cur;cur=tmp;}
+    unsigned ret=prev[blen];free(prev);free(cur);return ret;
+}
+static bool wide_boundary(const wchar_t *s,size_t pos){return pos==0||s[pos-1]==L' '||s[pos-1]==L'/'||s[pos-1]==L'_'||s[pos-1]==L'-'||s[pos-1]==L'.';}
+static bool fuzzy_token(const wchar_t *hay,size_t hlen,const wchar_t *tok,size_t tlen,unsigned *klass,unsigned *distance,size_t *pos)
+{
+    if(tlen==0){*klass=0;*distance=0;*pos=0;return true;}
+    for(size_t i=0;i+tlen<=hlen;i++)if(!wmemcmp(hay+i,tok,tlen)){*klass=0;*distance=0;*pos=i;return true;}
+    if(tlen<cfg.fuzzy_min||hlen<tlen)return false;
+    unsigned best=UINT_MAX;size_t bestpos=0,bestlen=0;
+    size_t minlen=tlen>cfg.fuzzy_discrepancy?tlen-cfg.fuzzy_discrepancy:1,maxlen=tlen+cfg.fuzzy_discrepancy;if(maxlen>hlen)maxlen=hlen;
+    for(size_t n=minlen;n<=maxlen;n++)for(size_t i=0;i+n<=hlen;i++){unsigned d=levenshtein(hay+i,n,tok,tlen);if(d<best||(d==best&&(i<bestpos||(i==bestpos&&n<bestlen)))){best=d;bestpos=i;bestlen=n;}}
+    if(best>cfg.fuzzy_distance)return false;
+    *klass=1;*distance=best;*pos=bestpos;return true;
+}
+static int fuzzy_score(struct item *item,const char *query)
+{
+    size_t hlen,qlen;wchar_t *hay=lower_wide(item->match,&hlen),*copy=lower_wide(query,&qlen),*p=copy;
+    unsigned klass=0,total=0,chunks=0;size_t first_pos=SIZE_MAX;bool boundary=false;
+    while(*p){while(*p==L' ')p++;if(!*p)break;wchar_t *end=p;while(*end&&*end!=L' ')end++;wchar_t save=*end;*end=L'\0';unsigned k,d;size_t pos;
+        if(!fuzzy_token(hay,hlen,p,(size_t)(end-p),&k,&d,&pos)){free(hay);free(copy);return -100000;}if(k>klass)klass=k;total+=d;chunks++;if(pos<first_pos){first_pos=pos;boundary=wide_boundary(hay,pos);}*end=save;p=end;}
+    item->match_class=klass;item->match_pos=first_pos==SIZE_MAX?0:(unsigned)first_pos;item->match_chunks=chunks;item->word_boundary=boundary;free(hay);free(copy);return klass?-(int)total:(int)qlen;
+}
+static int cmp_match(const void*a,const void*b){const struct item*x=*(const struct item*const*)a,*y=*(const struct item*const*)b;if(!cfg.no_sort){if(cfg.match_mode==MATCH_FUZZY){if(x->match_class!=y->match_class)return x->match_class<y->match_class?-1:1;if(x->score!=y->score)return x->score>y->score?-1:1;if(x->word_boundary!=y->word_boundary)return x->word_boundary?-1:1;if(x->match_chunks!=y->match_chunks)return x->match_chunks<y->match_chunks?-1:1;if(x->history!=y->history)return x->history>y->history?-1:1;if(x->match_pos!=y->match_pos)return x->match_pos<y->match_pos?-1:1;}else{if(x->score!=y->score)return y->score-x->score;if(x->history!=y->history)return y->history>x->history?1:-1;}}return x->input_index>y->input_index?1:x->input_index<y->input_index?-1:0;}
 static void match_items(void)
 {
-    match_count=0;for(size_t i=0;i<item_count;i++){int s=cfg.match_mode==MATCH_EXACT?exact_score(items[i].match,text):fzf_score(items[i].match,text);if(s>-100000){items[i].score=s;if(match_count==match_cap){match_cap=match_cap?match_cap*2:256;matches=xrealloc(matches,match_cap*sizeof *matches);}matches[match_count++]=&items[i];}}
+    match_count=0;for(size_t i=0;i<item_count;i++){int s=cfg.match_mode==MATCH_EXACT?exact_score(items[i].match,text):cfg.match_mode==MATCH_FUZZY?fuzzy_score(&items[i],text):fzf_score(items[i].match,text);if(s>-100000){items[i].score=s;if(match_count==match_cap){match_cap=match_cap?match_cap*2:256;matches=xrealloc(matches,match_cap*sizeof *matches);}matches[match_count++]=&items[i];}}
     qsort(matches,match_count,sizeof *matches,cmp_match);selected=0;first=0;
     if(select_string)for(size_t i=0;i<match_count;i++)if(!strcmp(matches[i]->text,select_string)){selected=i;break;}else{}
     else if(cfg.select_index>=0&&(size_t)cfg.select_index<match_count)selected=(size_t)cfg.select_index;
@@ -392,6 +438,13 @@ static void draw_highlight(const char *s,int x,int y,int w,bool sel)
     if(!*text)return;
     char *low=xstrdup(s),*needle=xstrdup(text);for(char*p=low;*p;p++)*p=tolower((unsigned char)*p);for(char*p=needle;*p;p++)*p=tolower((unsigned char)*p);char *p=strstr(low,needle);if(p){size_t pre=(size_t)(p-low),n=strlen(needle);char save=((char*)s)[pre];char *prefix=xstrdup(s);prefix[pre]='\0';int px=x+(int)drw_fontset_getwidth(drw,prefix);free(prefix);char *hit=xstrdup(s+pre);hit[n]='\0';int pw=(int)drw_fontset_getwidth(drw,hit);drw_setscheme(drw,scheme[sel?SchemeSelMatch:SchemeMatch]);drw_text(drw,px,y,pw,bh,0,hit,0);(void)save;free(hit);}free(low);free(needle);
 }
+static void draw_icon(cairo_surface_t *icon,int x,int y,int rowh)
+{
+    int ih=cairo_image_surface_get_height(icon);
+    cairo_surface_t *target=cairo_xlib_surface_create(dpy,drw->drawable,DefaultVisual(dpy,screen),mw,mh);
+    cairo_t *cr=cairo_create(target);cairo_set_source_surface(cr,icon,x,y+(rowh-ih)/2);cairo_paint(cr);
+    cairo_destroy(cr);cairo_surface_destroy(target);
+}
 static void drawmenu(void)
 {
     int x=cfg.hpad,y=cfg.vpad,w=mw-2*cfg.hpad,promptw=0;
@@ -401,7 +454,7 @@ static void drawmenu(void)
     char shown[TEXTSZ];const char *input=text;if(cfg.password&&*text){size_t n=strlen(text),j=0;const char *bullet=cfg.password_char?"*":"•";shown[0]='\0';while(j+strlen(bullet)<sizeof shown&&n--){strcat(shown,bullet);j+=strlen(bullet);}input=shown;}else if(!*text&&cfg.placeholder)input=cfg.placeholder;
     drw_setscheme(drw,scheme[SchemeInput]);drw_text(drw,x+promptw,y,w-promptw,bh,0,input,0);y+=bh;
     if(cfg.lines>0&&!(cfg.hide_before_typing&&!*text))y+=cfg.inner_pad;
-    if(!(cfg.hide_before_typing&&!*text)){size_t shown_n=MIN((size_t)cfg.lines,match_count-first);for(size_t k=0;k<shown_n;k++){size_t i=first+k;draw_highlight(matches[i]->text,x,y,w,i==selected);y+=bh;}}
+    if(!(cfg.hide_before_typing&&!*text)){size_t shown_n=MIN((size_t)cfg.lines,match_count-first);for(size_t k=0;k<shown_n;k++){size_t i=first+k;bool sel=i==selected;cairo_surface_t *icon=!cfg.dmenu&&cfg.icons?icon_load(matches[i]->icon,cfg.icon_size?cfg.icon_size:MAX(1,bh-4)):NULL;int iw=icon?cairo_image_surface_get_width(icon):0;if(sel){drw_setscheme(drw,scheme[SchemeSel]);drw_rect(drw,x,y,w,bh,1,1);}draw_highlight(matches[i]->text,x+(icon?iw+6:0),y,w-(icon?iw+6:0),sel);if(icon)draw_icon(icon,x,y,bh);y+=bh;}}
     if(cfg.counter){char b[64];snprintf(b,sizeof b,"%zu/%zu",match_count,item_count);int cw=TEXTW(b);drw_setscheme(drw,scheme[SchemeCounter]);drw_text(drw,mw-cfg.hpad-cw,cfg.vpad,cw,bh,0,b,0);}
     drw_map(drw,win,0,0,mw,mh);
 }
@@ -426,7 +479,7 @@ static void setup(void)
 {
     XSetWindowAttributes swa;XIM xim;XWindowAttributes wa;
     screen=DefaultScreen(dpy);root=RootWindow(dpy,screen);XGetWindowAttributes(dpy,root,&wa);sw=wa.width;sh=wa.height;
-    drw=drw_create(dpy,screen,root,sw,sh);Fnt *fonts=drw_fontset_create(drw,(const char**)&cfg.font,1);if(!fonts)die("xuzzel: cannot load font %s",cfg.font);drw_setfontset(drw,fonts);bh=cfg.line_height?cfg.line_height:(int)drw->fonts->h;
+    drw=drw_create(dpy,screen,root,sw,sh);Fnt *fonts=drw_fontset_create(drw,(const char**)&cfg.font,1);if(!fonts)die("xuzzel: cannot load font %s",cfg.font);drw_setfontset(drw,fonts);bh=cfg.line_height?cfg.line_height:(int)drw->fonts->h;if(!cfg.dmenu&&cfg.icons&&cfg.icon_size>0)bh=MAX(bh,cfg.icon_size+4);
     int visible=cfg.lines;if(cfg.minimal_lines)visible=MIN(visible,(int)match_count);int gap=visible>0?cfg.inner_pad:0;mh=2*cfg.vpad+bh*(1+visible+(message?1:0))+gap;
     int char_width=(int)drw_fontset_getwidth(drw,"o")+cfg.letter_spacing;
     if(char_width<0)char_width=0;
@@ -449,7 +502,8 @@ static void setup(void)
     Atom motif_hints=XInternAtom(dpy,"_MOTIF_WM_HINTS",False);
     XChangeProperty(dpy,win,motif_hints,motif_hints,32,PropModeReplace,
                     (unsigned char*)&motif,5);
-    XClassHint ch={"xuzzel","xuzzel"};XSetClassHint(dpy,win,&ch);XMapRaised(dpy,win);XSetInputFocus(dpy,win,RevertToParent,CurrentTime);
+    char resource_name[]="xuzzel",resource_class[]="xuzzel";
+    XClassHint ch={resource_name,resource_class};XSetClassHint(dpy,win,&ch);XMapRaised(dpy,win);XSetInputFocus(dpy,win,RevertToParent,CurrentTime);
     xim=XOpenIM(dpy,NULL,NULL,NULL);if(xim)xic=XCreateIC(xim,XNInputStyle,XIMPreeditNothing|XIMStatusNothing,XNClientWindow,win,XNFocusWindow,win,NULL);
     utf8=XInternAtom(dpy,"UTF8_STRING",False);clip=XInternAtom(dpy,"CLIPBOARD",False);targets=XInternAtom(dpy,"TARGETS",False);(void)targets;
     int grab = AlreadyGrabbed;
@@ -473,29 +527,32 @@ static void run(void)
 {
     XEvent ev;while(!XNextEvent(dpy,&ev)){if(xic&&XFilterEvent(&ev,win))continue;switch(ev.type){case Expose:if(!ev.xexpose.count)drawmenu();break;case KeyPress:keypress(&ev.xkey);break;case ButtonPress:if(!cfg.no_mouse){if(ev.xbutton.window!=win){cleanup();exit(1);}buttonpress(&ev.xbutton);}break;case SelectionNotify:if(ev.xselection.property){Atom da;int di;unsigned long n,left;unsigned char*p=NULL;if(XGetWindowProperty(dpy,win,utf8,0,TEXTSZ/4,True,utf8,&da,&di,&n,&left,&p)==Success&&p){insert((char*)p,(ssize_t)n);XFree(p);drawmenu();}}break;}}
 }
-static void cleanup(void){if(!dpy)return;if(xic)XDestroyIC(xic);XUngrabPointer(dpy,CurrentTime);XUngrabKeyboard(dpy,CurrentTime);if(win)XDestroyWindow(dpy,win);for(int i=0;i<SchemeLast;i++)free(scheme[i]);if(drw)drw_free(drw);XCloseDisplay(dpy);dpy=NULL;}
+static void cleanup(void){icon_cleanup();if(!dpy)return;if(xic)XDestroyIC(xic);XUngrabPointer(dpy,CurrentTime);XUngrabKeyboard(dpy,CurrentTime);if(win)XDestroyWindow(dpy,win);for(int i=0;i<SchemeLast;i++)free(scheme[i]);if(drw)drw_free(drw);XCloseDisplay(dpy);dpy=NULL;}
 
 /* Values follow fuzzel 1.15.0. Compatibility-only flags are intentionally accepted. */
-    enum { O_CONFIG=256,O_CHECK,O_CACHE,O_OVERRIDE,O_BOLD,O_ICON_THEME,O_PASSWORD,O_XMARGIN,O_YMARGIN,O_SELECT,O_SELECT_INDEX,O_TABS,O_PROMPT_COLOR,O_PLACEHOLDER_COLOR,O_INPUT_COLOR,O_COUNTER_COLOR,O_SELECTION_RADIUS,O_SHOW_ACTIONS,O_MATCH_MODE,O_NO_SORT,O_COUNTER,O_FILTER_DESKTOP,O_FUZZY_MIN,O_FUZZY_DISC,O_FUZZY_DIST,O_LINE_HEIGHT,O_LETTER_SPACING,O_LAYER,O_EXIT_FOCUS,O_LAUNCH_PREFIX,O_DMENU,O_DMENU0,O_INDEX,O_LOG_LEVEL,O_LIST_EXEC,O_NTH,O_WITH_NTH,O_ACCEPT_NTH,O_DELIM,O_ONLY_MATCH,O_AUTO_SELECT,O_MESSAGE,O_MESSAGE_MODE,O_NO_MOUSE,O_HIDE,O_HIDE_PROMPT,O_MINIMAL,O_DELAY_MS,O_DELAY_LIMIT,O_SEARCH,O_CACHE_ONLY,O_NO_CACHE,O_TIMINGS,O_ANCHOR};
+    enum { O_CONFIG=256,O_CHECK,O_CACHE,O_OVERRIDE,O_BOLD,O_ICON_THEME,O_ICON_SIZE,O_PASSWORD,O_XMARGIN,O_YMARGIN,O_SELECT,O_SELECT_INDEX,O_TABS,O_PROMPT_COLOR,O_PLACEHOLDER_COLOR,O_INPUT_COLOR,O_COUNTER_COLOR,O_SELECTION_RADIUS,O_SHOW_ACTIONS,O_MATCH_MODE,O_NO_SORT,O_COUNTER,O_FILTER_DESKTOP,O_FUZZY_MIN,O_FUZZY_DISC,O_FUZZY_DIST,O_LINE_HEIGHT,O_LETTER_SPACING,O_LAYER,O_EXIT_FOCUS,O_LAUNCH_PREFIX,O_DMENU,O_DMENU0,O_INDEX,O_LOG_LEVEL,O_LIST_EXEC,O_NTH,O_WITH_NTH,O_ACCEPT_NTH,O_DELIM,O_ONLY_MATCH,O_AUTO_SELECT,O_MESSAGE,O_MESSAGE_MODE,O_NO_MOUSE,O_HIDE,O_HIDE_PROMPT,O_MINIMAL,O_DELAY_MS,O_DELAY_LIMIT,O_SEARCH,O_CACHE_ONLY,O_NO_CACHE,O_TIMINGS,O_ANCHOR};
 static const struct option opts[]={
-{"prompt",1,0,'p'},
+{"prompt",1,0,'p'},{"icon-size",1,0,O_ICON_SIZE},
 {"config",1,0,O_CONFIG},{"check-config",0,0,O_CHECK},{"namespace",1,0,'n'},{"cache",1,0,O_CACHE},{"override",1,0,O_OVERRIDE},{"output",1,0,'o'},{"font",1,0,'f'},{"use-bold",0,0,O_BOLD},{"dpi-aware",1,0,'D'},{"gamma-correct",0,0,0},{"icon-theme",1,0,O_ICON_THEME},{"no-icons",0,0,'I'},{"hide-before-typing",0,0,O_HIDE},{"fields",1,0,'F'},{"password",2,0,O_PASSWORD},{"anchor",1,0,'a'},{"x-margin",1,0,O_XMARGIN},{"y-margin",1,0,O_YMARGIN},{"select",1,0,O_SELECT},{"select-index",1,0,O_SELECT_INDEX},{"lines",1,0,'l'},{"minimal-lines",0,0,O_MINIMAL},{"hide-prompt",0,0,O_HIDE_PROMPT},{"width",1,0,'w'},{"tabs",1,0,O_TABS},{"horizontal-pad",1,0,'x'},{"vertical-pad",1,0,'y'},{"inner-pad",1,0,'P'},{"background-color",1,0,'b'},{"text-color",1,0,'t'},{"message-color",1,0,0},{"prompt-color",1,0,O_PROMPT_COLOR},{"placeholder-color",1,0,O_PLACEHOLDER_COLOR},{"input-color",1,0,O_INPUT_COLOR},{"match-color",1,0,'m'},{"selection-color",1,0,'s'},{"selection-text-color",1,0,'S'},{"selection-match-color",1,0,'M'},{"selection-radius",1,0,O_SELECTION_RADIUS},{"counter-color",1,0,O_COUNTER_COLOR},{"border-width",1,0,'B'},{"border-color",1,0,'C'},{"show-actions",0,0,O_SHOW_ACTIONS},{"match-mode",1,0,O_MATCH_MODE},{"no-sort",0,0,O_NO_SORT},{"counter",0,0,O_COUNTER},{"filter-desktop",2,0,O_FILTER_DESKTOP},{"fuzzy-min-length",1,0,O_FUZZY_MIN},{"fuzzy-max-length-discrepancy",1,0,O_FUZZY_DISC},{"fuzzy-max-distance",1,0,O_FUZZY_DIST},{"line-height",1,0,O_LINE_HEIGHT},{"letter-spacing",1,0,O_LETTER_SPACING},{"layer",1,0,O_LAYER},{"exit-on-keyboard-focus-loss",1,0,O_EXIT_FOCUS},{"launch-prefix",1,0,O_LAUNCH_PREFIX},{"dmenu",0,0,'d'},{"dmenu0",0,0,O_DMENU0},{"index",0,0,O_INDEX},{"log-level",1,0,O_LOG_LEVEL},{"list-executables-in-path",1,0,O_LIST_EXEC},{"dmenu-match-nth",1,0,O_NTH},{"dmenu-with-nth",1,0,O_WITH_NTH},{"dmenu-accept-nth",1,0,O_ACCEPT_NTH},{"dmenu-nth-delimiter",1,0,O_DELIM},{"dmenu-only-match",0,0,O_ONLY_MATCH},{"auto-select",0,0,O_AUTO_SELECT},{"dmenu-message",1,0,O_MESSAGE},{"dmenu-message-mode",1,0,O_MESSAGE_MODE},{"no-mouse",0,0,O_NO_MOUSE},{"search",1,0,O_SEARCH},{"print-timings",0,0,O_TIMINGS},{"version",0,0,'v'},{"help",0,0,'h'},{0,0,0,0}};
 
 static void parse_cli(int argc,char **argv,bool late)
 {
     int c;optind=1;opterr=0;while((c=getopt_long(argc,argv,":n:o:f:D:IF:ia:l:w:x:y:p:P:b:t:m:s:S:M:B:C:TdRvh",opts,NULL))!=-1){
+        if(late&&c==O_ICON_SIZE){cfg.icon_size=parse_int(optarg,0,4096,"icon-size");continue;}
         if(!late){if(c==O_CONFIG)setstr(&config_path,optarg);else if(c==O_CHECK)check_config=true;else if(c=='h'){usage(stdout);exit(0);}else if(c==O_MESSAGE_MODE){die("xuzzel: unsupported option: --dmenu-message-mode");}else if(c=='v'){puts("xuzzel " VERSION);exit(0);}continue;}
         switch(c){case O_CONFIG:case O_CHECK:break;case 'n':break;case O_CACHE:setstr(&cfg.cache,optarg);break;case O_OVERRIDE:{char*x=xstrdup(optarg),*eq=strchr(x,'=');if(!eq)die("xuzzel: --override expects [section.]key=value");*eq++='\0';char*dot=strchr(x,'.');if(dot){*dot++='\0';apply_key(x,dot,eq,true);}else apply_key("main",x,eq,true);free(x);break;}case 'o':setstr(&cfg.output,optarg);if(isdigit((unsigned char)*optarg))cfg.monitor=atoi(optarg);break;case 'f':setstr(&cfg.font,optarg);break;case O_BOLD:cfg.bold=true;break;case 'D':break;case O_ICON_THEME:setstr(&cfg.icon_theme,optarg);break;case 'I':cfg.icons=false;break;case O_HIDE:cfg.hide_before_typing=true;break;case 'F':setstr(&cfg.fields,optarg);break;case O_PASSWORD:cfg.password=true;if(optarg&&*optarg)cfg.password_char=true;break;case 'a':setstr(&cfg.anchor,optarg);break;case O_XMARGIN:cfg.x_margin=parse_int(optarg,0,100000,"x-margin");break;case O_YMARGIN:cfg.y_margin=parse_int(optarg,0,100000,"y-margin");break;case O_SELECT:setstr(&select_string,optarg);break;case O_SELECT_INDEX:cfg.select_index=parse_int(optarg,0,100000000,"select-index");break;case 'l':cfg.lines=parse_int(optarg,0,100000,"lines");break;case O_MINIMAL:cfg.minimal_lines=true;break;case O_HIDE_PROMPT:cfg.hide_prompt=true;break;case 'w':cfg.width=parse_int(optarg,1,100000,"width");break;case O_TABS:cfg.tabs=parse_int(optarg,1,64,"tabs");break;case 'x':cfg.hpad=parse_int(optarg,0,100000,"horizontal-pad");break;case 'y':cfg.vpad=parse_int(optarg,0,100000,"vertical-pad");break;case 'P':cfg.inner_pad=parse_int(optarg,0,10000,"inner-pad");break;case 'b':setcolor(SchemeNorm,1,optarg);setcolor(SchemeInput,1,optarg);break;case 't':setcolor(SchemeNorm,0,optarg);break;case 'p':setstr(&cfg.prompt,optarg);break;case O_PROMPT_COLOR:setcolor(SchemePrompt,0,optarg);break;case O_PLACEHOLDER_COLOR:setcolor(SchemeInput,0,optarg);break;case O_INPUT_COLOR:setcolor(SchemeInput,0,optarg);break;case 'm':setcolor(SchemeMatch,0,optarg);break;case 's':setcolor(SchemeSel,1,optarg);break;case 'S':setcolor(SchemeSel,0,optarg);break;case 'M':setcolor(SchemeSelMatch,0,optarg);break;case O_COUNTER_COLOR:setcolor(SchemeCounter,0,optarg);break;case 'B':cfg.border_width=parse_int(optarg,0,1000,"border-width");break;case 'C':setcolor(SchemeBorder,0,optarg);break;case O_MATCH_MODE:apply_key("main","match-mode",optarg,true);break;case O_NO_SORT:cfg.no_sort=true;break;case O_COUNTER:cfg.counter=true;break;case O_FUZZY_MIN:cfg.fuzzy_min=parse_int(optarg,0,100000,"fuzzy-min-length");break;case O_FUZZY_DISC:cfg.fuzzy_discrepancy=parse_int(optarg,0,100000,"fuzzy-max-length-discrepancy");break;case O_FUZZY_DIST:cfg.fuzzy_distance=parse_int(optarg,0,100000,"fuzzy-max-distance");break;case O_LINE_HEIGHT:cfg.line_height=parse_int(optarg,0,10000,"line-height");break;case O_LETTER_SPACING:cfg.letter_spacing=parse_int(optarg,-100,1000,"letter-spacing");break;case O_LAUNCH_PREFIX:setstr(&cfg.launch_prefix,optarg);break;case 'd':cfg.dmenu=true;break;case O_DMENU0:cfg.dmenu=true;cfg.dmenu0=true;break;case O_INDEX:cfg.index=true;break;case O_NTH:setstr(&match_nth,optarg);break;case O_WITH_NTH:setstr(&with_nth,optarg);break;case O_ACCEPT_NTH:setstr(&accept_nth,optarg);break;case O_DELIM:setstr(&nth_delim,optarg);break;case O_ONLY_MATCH:only_match=true;break;case O_AUTO_SELECT:cfg.auto_select=true;break;case O_MESSAGE:setstr(&message,optarg);break;case O_NO_MOUSE:cfg.no_mouse=true;break;case O_SEARCH:setstr(&search_text,optarg);break;case O_TIMINGS:print_timings=true;break;case 'i':break;case 'T':break;case 'R':break;case O_LOG_LEVEL:cfg.log_level_none=!strcmp(optarg,"none");break;case ':':die("xuzzel: option requires an argument: %s",argv[optind-1]);case '?':die("xuzzel: unknown option: %s",argv[optind-1]);default:break;}
     }if(optind<argc)die("xuzzel: unexpected positional argument: %s",argv[optind]);
 }
-static void usage(FILE*f){fprintf(f,"usage: xuzzel [OPTIONS]\nX11 application launcher and dmenu compatible with fuzzel 1.15 option names.\n  -d, --dmenu                 read entries from stdin and print selection\n  -f, --font=FONT             fontconfig font\n  -p, --prompt=TEXT           prompt\n  -l, --lines=N               visible result lines\n  -w, --width=N               width in characters\n      --config=PATH           configuration file\n      --check-config          validate configuration and exit\n      --match-mode=MODE       exact, fzf, or fuzzy\n      --password[=CHAR]       obscure input\n  -h, --help                  show help\n  -v, --version               show version\nSee xuzzel(1) and xuzzel.ini(5).\n");}
+static void usage(FILE*f){fprintf(f,"usage: xuzzel [OPTIONS]\nX11 application launcher and dmenu compatible with fuzzel 1.15 option names.\n  -d, --dmenu                 read entries from stdin and print selection\n  -f, --font=FONT             fontconfig font\n  -p, --prompt=TEXT           prompt\n  -l, --lines=N               visible result lines\n  -w, --width=N               width in characters\n      --icon-size=PIXELS      icon size; 0 uses row height\n      --config=PATH           configuration file\n      --check-config          validate configuration and exit\n      --match-mode=MODE       exact, fzf, or fuzzy\n      --password[=CHAR]       obscure input\n  -h, --help                  show help\n  -v, --version               show version\nSee xuzzel(1) and xuzzel.ini(5).\n");}
 int main(int argc,char **argv)
 {
+    if(argc==5&&!strcmp(argv[1],"--icon-probe"))return icon_probe(argv[2],argv[3],parse_int(argv[4],1,4096,"icon size"))?0:1;
     setlocale(LC_CTYPE,"");defaults();parse_cli(argc,argv,false);load_config();parse_cli(argc,argv,true);if(check_config)return 0;
     if(search_text){snprintf(text,sizeof text,"%s",search_text);cursor=strlen(text);}if(cfg.dmenu)read_stdin_items();else read_apps();read_history();match_items();
     if(cfg.auto_select&&match_count==1)accept(false);
     if (!(dpy = XOpenDisplay(NULL)))
         die("xuzzel: cannot open display");
+    icon_init(cfg.icon_theme);
     setup();
     drawmenu();
     run();

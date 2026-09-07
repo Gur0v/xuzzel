@@ -6,7 +6,7 @@ Xuzzel runs as a centered override-redirect window, supports keyboard and mouse 
 
 ## Build
 
-Dependencies: C99 compiler, pkg-config, Xlib, Xft/fontconfig, Xinerama.
+Dependencies: C99 compiler, pkg-config, Xlib, Xft/fontconfig, Xinerama, Cairo/Xlib, and libpng. SVG icons use bundled NanoSVG.
 
     make
     make check
@@ -44,8 +44,9 @@ Configuration lookup prefers `fuzzel/fuzzel.ini`, then `xuzzel/xuzzel.ini`, unde
 ## Implemented
 
 - XDG desktop discovery, launch, terminal entries, hidden/no-display handling
+- PNG/SVG launcher icons with freedesktop theme inheritance and fallbacks
 - dmenu stdin/stdout, prompt/password/search/select/auto-select modes
-- fzf-style subsequence and exact matching, source-order mode
+- fzf-style subsequence, exact, and Unicode Levenshtein fuzzy matching; source-order mode
 - persistent launcher history under XDG cache
 - fuzzel/xuzzel INI search, validation and command-line overrides
 - fuzzel 1.15 short/long option-name surface, NUL input, index output

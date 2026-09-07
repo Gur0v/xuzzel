@@ -24,6 +24,44 @@ trap 'rm -rf "$tmp"' EXIT HUP INT TERM
 mkdir -p "$tmp/fuzzel"
 printf '[main]\nlines=7\nmatch-mode=fzf\n[colors]\nbackground=112233ff\n' > "$tmp/fuzzel/fuzzel.ini"
 XDG_CONFIG_HOME="$tmp" ./xuzzel --check-config
+./xuzzel --config /dev/null --check-config --icon-size=24
+
+# Resolve and decode themed PNG/SVG icons without requiring an X server.
+mkdir -p "$tmp/data/icons/parent/16x16/apps" "$tmp/data/icons/child" "$tmp/data/icons/hicolor/scalable/apps" "$tmp/data/pixmaps"
+cat > "$tmp/data/icons/parent/index.theme" <<EOF
+[Icon Theme]
+Name=Parent
+Directories=16x16/apps
+[16x16/apps]
+Size=16
+Type=Fixed
+EOF
+cat > "$tmp/data/icons/child/index.theme" <<EOF
+[Icon Theme]
+Name=Child
+Inherits=parent
+Directories=
+EOF
+cat > "$tmp/data/icons/hicolor/index.theme" <<EOF
+[Icon Theme]
+Name=Hicolor
+Directories=scalable/apps
+[scalable/apps]
+Size=48
+Type=Scalable
+MinSize=1
+MaxSize=256
+EOF
+# Valid 16x16 RGBA PNG.
+printf '%s' 'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAABmJLR0QA/wD/AP+gvaeTAAAAMklEQVQ4je3MsQ0AIAACQXD/XbTU6d5Sa2o+oeQELPKmAWwrCdCInl8FChR4wAGUTNK+KN5xgmeR0lYAAAAASUVORK5CYII=' | base64 -d > "$tmp/data/icons/parent/16x16/apps/tiny.png"
+cp "$tmp/data/icons/parent/16x16/apps/tiny.png" "$tmp/data/pixmaps/fallback.png"
+cat > "$tmp/data/icons/hicolor/scalable/apps/vector.svg" <<EOF
+<svg xmlns="http://www.w3.org/2000/svg" width="8" height="4"><rect width="8" height="4" fill="#f00"/></svg>
+EOF
+XDG_DATA_HOME="$tmp/data" XDG_DATA_DIRS= ./xuzzel --icon-probe child tiny 24 || fail icon-theme-inheritance-png
+XDG_DATA_HOME="$tmp/data" XDG_DATA_DIRS= ./xuzzel --icon-probe child vector 24 || fail icon-hicolor-svg
+XDG_DATA_HOME="$tmp/data" XDG_DATA_DIRS= ./xuzzel --icon-probe child fallback 24 || fail icon-pixmaps
+./xuzzel --icon-probe child "$tmp/data/icons/parent/16x16/apps/tiny.png" 24 || fail icon-absolute-png
 XDG_CONFIG_HOME="$tmp" ./xuzzel --check-config --override lines=3 --override colors.selection=aabbcc
 # Quoted prompt values must parse without retaining their delimiter quotes.
 printf '[main]\nprompt="> "\n[colors]\nselection=aabbcc\n[border]\nwidth=2\n' > "$tmp/sections.ini"
@@ -34,6 +72,32 @@ printf '[main]\nsort-result=no\nenable-mouse=no\n' > "$tmp/behavior.ini"
 ./xuzzel --config "$tmp/behavior.ini" --check-config
 printf '[main]\nno-sort=yes\n' > "$tmp/no-sort.ini"
 ./xuzzel --config "$tmp/no-sort.ini" --check-config
+
+# --auto-select exits before opening X when filtering leaves one result.
+fuzzy_one() {
+  expected=$1 search=$2; shift 2
+  got=$(printf '%s\n' "$@" | ./xuzzel --dmenu --auto-select --match-mode=fuzzy --search "$search")
+  [ "$got" = "$expected" ] || fail "fuzzy '$search': expected '$expected', got '$got'"
+}
+fuzzy_none() {
+  search=$1; shift
+  if DISPLAY= printf '%s\n' "$@" | DISPLAY= ./xuzzel --dmenu --auto-select --match-mode=fuzzy --search "$search" >/dev/null 2>&1; then
+    fail "fuzzy '$search': unexpected match"
+  fi
+}
+fuzzy_one 'Mozilla Firefox' 'mozila' 'Mozilla Firefox' 'Chromium'
+fuzzy_none 'mozlila' 'Mozilla Firefox' 'Chromium'
+fuzzy_one 'Alpha Beta Tool' 'ALPA   beta' 'Alpha Beta Tool' 'Alpha Gamma Tool'
+fuzzy_one 'Éclair Editor' 'éclir' 'Éclair Editor' 'Terminal'
+# Distance zero leaves the exact substring as the sole auto-select candidate.
+got=$(printf '%s\n' 'exact needle' 'needlx' | ./xuzzel --dmenu --auto-select \
+  --match-mode=fuzzy --fuzzy-max-distance=0 --search needle)
+[ "$got" = 'exact needle' ] || fail "fuzzy exact preference: got '$got'"
+fuzzy_one 'abcdef' 'abqdef' 'abcdef' 'abzzef'
+
+# All three fuzzy limits are active configuration, not compatibility no-ops.
+printf '[main]\nmatch-mode=fuzzy\nfuzzy-min-length=7\nfuzzy-max-length-discrepancy=0\nfuzzy-max-distance=0\n' > "$tmp/fuzzy.ini"
+./xuzzel --config "$tmp/fuzzy.ini" --check-config
 
 # Physically unsupported or unimplemented settings must not be silently accepted.
 printf '[main]\ngamma-correct-blending=no\n' > "$tmp/unsupported.ini"

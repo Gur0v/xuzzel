@@ -4,19 +4,27 @@ BINDIR ?= $(PREFIX)/bin
 MANDIR ?= $(PREFIX)/share/man
 CC ?= cc
 PKG_CONFIG ?= pkg-config
-PKGS = x11 xft fontconfig xinerama
+PKGS = x11 xft fontconfig xinerama cairo-xlib libpng
 CPPFLAGS += -D_XOPEN_SOURCE=700 -DXINERAMA $(shell $(PKG_CONFIG) --cflags $(PKGS))
-CFLAGS ?= -O2
-CFLAGS += -std=c99 -Wall -Wextra -Wpedantic
-LDLIBS += $(shell $(PKG_CONFIG) --libs $(PKGS))
-OBJ = xuzzel.o drw.o util.o
+CFLAGS ?= -O3 -flto -fno-plt -ffunction-sections -fdata-sections -DNDEBUG
+CFLAGS += -std=c99 -Wall -Wextra -Wpedantic -Werror \
+	-Wformat=2 -Wformat-security -Wstrict-prototypes -Wmissing-prototypes \
+	-Wshadow -Wundef -Wpointer-arith -Wcast-align -Wwrite-strings -Wvla \
+	-Wdate-time -Wnull-dereference -Wduplicated-cond -Wduplicated-branches \
+	-Wlogical-op
+LDFLAGS += -flto -Wl,--as-needed -Wl,--gc-sections
+LDLIBS += $(shell $(PKG_CONFIG) --libs $(PKGS)) -lm
+OBJ = xuzzel.o icon.o nanosvg_impl.o drw.o util.o
 
 all: xuzzel
 
 xuzzel: $(OBJ)
 	$(CC) $(LDFLAGS) -o $@ $(OBJ) $(LDLIBS)
 
-xuzzel.o: xuzzel.c drw.h util.h
+xuzzel.o: xuzzel.c drw.h icon.h util.h
+icon.o: icon.c icon.h util.h nanosvg_vendor.h third_party/nanosvg/nanosvg.h third_party/nanosvg/nanosvgrast.h
+nanosvg_impl.o: nanosvg_impl.c third_party/nanosvg/nanosvg.h third_party/nanosvg/nanosvgrast.h
+	$(CC) $(CPPFLAGS) -O3 -flto -ffunction-sections -fdata-sections -std=c99 -w -c -o $@ nanosvg_impl.c
 drw.o: drw.c drw.h util.h
 util.o: util.c util.h
 
