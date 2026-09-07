@@ -43,7 +43,7 @@
 #include "icon.h"
 #include "util.h"
 
-#define VERSION "1.15.0-x11.2"
+#define VERSION "1.15.0-x11.3"
 #define TEXTSZ 4096
 #define TEXTW(s) (drw_fontset_getwidth(drw, (s)))
 
@@ -460,11 +460,54 @@ static void drawmenu(void)
 }
 
 static void paste(void){XConvertSelection(dpy,clip,utf8,utf8,win,CurrentTime);}
+
+static void launch_command(const char *command)
+{
+    size_t n=strlen(command)+(cfg.launch_prefix?strlen(cfg.launch_prefix):0)+2;
+    char *cmd=ecalloc(n,1);
+    snprintf(cmd,n,"%s%s%s",cfg.launch_prefix?cfg.launch_prefix:"",cfg.launch_prefix?" ":"",command);
+    pid_t child=fork();
+    if(child==0){setsid();execl("/bin/sh","sh","-c",cmd,(char*)NULL);_exit(127);}
+    free(cmd);
+}
+
+static bool command_word_exists(const char *input)
+{
+    while(isspace((unsigned char)*input))input++;
+    size_t len=strcspn(input," \t\r\n");
+    if(!len)return false;
+    char *word=ecalloc(len+1,1);memcpy(word,input,len);
+    static const char *builtins[]={"cd","alias","bg","break","command","continue","eval","exec","exit","export","fg","getopts","hash","jobs","pwd","read","readonly","return","set","shift","test","times","trap","type","ulimit","umask","unalias","unset","wait",NULL};
+    for(size_t i=0;builtins[i];i++)if(!strcmp(word,builtins[i])){free(word);return true;}
+    bool found=false;
+    if(strchr(word,'/'))found=!access(word,X_OK);
+    else{
+        const char *path=getenv("PATH");char *copy=xstrdup(path&&*path?path:"/usr/local/bin:/usr/bin:/bin"),*save=NULL;
+        for(char *dir=strtok_r(copy,":",&save);dir&&!found;dir=strtok_r(NULL,":",&save)){char candidate[PATH_MAX];snprintf(candidate,sizeof candidate,"%s/%s",*dir?dir:".",word);found=!access(candidate,X_OK);}
+        free(copy);
+    }
+    free(word);return found;
+}
+
+static struct item *exact_launcher_item(const char *input)
+{
+    if(!input||!*input)return NULL;
+    for(size_t i=0;i<match_count;i++)
+        if(matches[i]->desktop_id&&!strcasecmp(matches[i]->text,input))
+            return matches[i];
+    return NULL;
+}
+
 static void accept(bool input)
 {
     struct item *it=match_count?matches[selected]:NULL;if(!input&&only_match&&!it)return;
     const char *out=input||!it?text:(it->exec?it->exec:it->text);
-    if(cfg.dmenu){if(cfg.index&&it)printf("%zu\n",it->input_index);else if(it&&accept_nth){char*r=field_select(it->exec?it->exec:it->text,accept_nth);puts(r);free(r);}else puts(out);fflush(stdout);}else if(it){write_history(it);size_t n=strlen(out)+(cfg.launch_prefix?strlen(cfg.launch_prefix):0)+2;char*cmd=ecalloc(n,1);snprintf(cmd,n,"%s%s%s",cfg.launch_prefix?cfg.launch_prefix:"",cfg.launch_prefix?" ":"",out);pid_t p=fork();if(p==0){setsid();execl("/bin/sh","sh","-c",cmd,(char*)NULL);_exit(127);}free(cmd);}cleanup();exit(0);
+    if(cfg.dmenu){if(cfg.index&&it)printf("%zu\n",it->input_index);else if(it&&accept_nth){char*r=field_select(it->exec?it->exec:it->text,accept_nth);puts(r);free(r);}else puts(out);fflush(stdout);}else{
+        struct item *exact=input?NULL:exact_launcher_item(text);
+        if(exact)it=exact;
+        if((input||(!exact&&(!it||command_word_exists(text))))&&*text){launch_command(text);}
+        else if(it){write_history(it);launch_command(it->exec?it->exec:it->text);}
+    }cleanup();exit(0);
 }
 static void keypress(XKeyEvent *ev)
 {

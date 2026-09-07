@@ -5,7 +5,7 @@ export ASAN_OPTIONS=${ASAN_OPTIONS:-detect_leaks=0}
 
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 
-./xuzzel --version | grep -q '^xuzzel 1\.15\.0-x11\.2$' || fail version
+./xuzzel --version | grep -q '^xuzzel 1\.15\.0-x11\.3$' || fail version
 ./xuzzel --help | grep -q -- '--dmenu' || fail help
 ./xuzzel --config ./xuzzel.ini --check-config
 

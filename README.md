@@ -41,6 +41,10 @@ Run as an application launcher:
 
     xuzzel
 
+Type any shell command and press Enter when no desktop entry matches. This supports commands with arguments and shell syntax, such as `systemctl poweroff`, `ls -la`, or `cat /etc/os-release`. Shift+Enter always executes the typed input instead of the selected desktop entry.
+
+Commands run through `/bin/sh -c` in a detached child process. Output is not displayed by xuzzel. Shell built-ins such as `cd` affect only that child process; use a terminal command when interactive output or a persistent working directory is needed.
+
 Use it as a picker:
 
     printf 'shutdown\nreboot\ncancel\n' | xuzzel --dmenu --prompt='Power: '
@@ -78,6 +82,7 @@ Scaled icon rasters are cached as PNG files under `${XDG_CACHE_HOME:-$HOME/.cach
 - fuzzel 1.15 short/long option-name surface, NUL input, index output
 - Xft/fontconfig text and Cairo/Xlib icon rendering, keyboard/mouse editing, mouse-disable configuration, clipboard paste
 - outside-click cancellation with pointer cleanup
+- typed shell-command fallback and Shift+Enter command execution
 - Xinerama monitor index, anchors/margins, server/Xft DPI behavior
 - colors, spacing, borders, sorted/source-order results, match counter, minimal/hide modes
 

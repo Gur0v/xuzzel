@@ -1,4 +1,4 @@
-.TH XUZZEL 1 "September 2026" "xuzzel 1.15.0-x11.2"
+.TH XUZZEL 1 "September 2026" "xuzzel 1.15.0-x11.3"
 .SH NAME
 xuzzel \- X11 application launcher and dmenu
 .SH SYNOPSIS
@@ -11,6 +11,8 @@ is an X11 launcher and picker retaining dmenu's Xlib/Xft drawing and event-loop 
 it reads newline-delimited choices from standard input and writes the selected choice to standard output.
 .PP
 Command-line and configuration names track fuzzel 1.15.0 where an X11 equivalent exists. Command-line values override configuration. This is an independent X11 program and installs no fuzzel alias.
+.PP
+In launcher mode, Enter executes the selected desktop entry. If no entry matches, Enter executes the typed input through /bin/sh -c. Shift+Enter always executes the typed input. Commands run detached; their output is not displayed, and shell built-ins such as cd affect only the child shell.
 .SH OPTIONS
 .TP
 .BR -d , " --dmenu"
