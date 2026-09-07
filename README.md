@@ -65,6 +65,8 @@ Choose matching mode with `match-mode=exact`, `match-mode=fzf`, or `match-mode=f
 
 Icons are enabled by default in launcher mode. `icon-theme` selects a freedesktop theme and `icon-size` sets row icon size in pixels; size `0` derives it from row height. Theme inheritance, `hicolor`, `/usr/share/pixmaps`, absolute paths, PNG, and SVG are supported.
 
+Scaled icon rasters are cached as PNG files under `${XDG_CACHE_HOME:-$HOME/.cache}/xuzzel/icons`. Cache keys include the resolved source path, source modification time and size, requested pixel size, and cache format version, so changed icons are regenerated automatically. Cache failures or corrupt entries are ignored and regenerated when possible. The `--cache` option controls launcher history only and does not relocate this icon cache.
+
 ## Implemented
 
 - XDG desktop discovery, launch, terminal entries, hidden/no-display handling

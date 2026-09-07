@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <limits.h>
 #include <png.h>
+#include <stdint.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -40,6 +41,8 @@ struct cached_icon {
 static char *theme_name;
 static struct theme *themes;
 static struct cached_icon *cache;
+
+#define ICON_CACHE_VERSION "xuzzel-icon-v1"
 
 static char *xstrdup(const char *s){char *p=strdup(s);if(!p)die("strdup:");return p;}
 static void *xrealloc(void *p,size_t n){p=realloc(p,n);if(!p)die("realloc:");return p;}
@@ -176,10 +179,99 @@ static char *resolve_icon(const char *name,int size)
     return p;
 }
 
+static uint64_t fnv1a(const void *data,size_t len,uint64_t hash)
+{
+    const unsigned char *p=data;
+    for(size_t i=0;i<len;i++){
+        hash^=p[i];
+        hash*=UINT64_C(1099511628211);
+    }
+    return hash;
+}
+
+static bool mkdir_one(const char *path)
+{
+    return mkdir(path,0700)==0||errno==EEXIST;
+}
+
+static char *icon_cache_dir(void)
+{
+    const char *base=getenv("XDG_CACHE_HOME"),*home=getenv("HOME");
+    char root[PATH_MAX],app[PATH_MAX],icons[PATH_MAX];
+    if(base&&*base){
+        if(snprintf(root,sizeof root,"%s",base)>=(int)sizeof root)return NULL;
+    }else{
+        if(!home||!*home||snprintf(root,sizeof root,"%s/.cache",home)>=(int)sizeof root)return NULL;
+    }
+    if(snprintf(app,sizeof app,"%s/xuzzel",root)>=(int)sizeof app||snprintf(icons,sizeof icons,"%s/icons",app)>=(int)sizeof icons)return NULL;
+    if(!mkdir_one(root)||!mkdir_one(app)||!mkdir_one(icons))return NULL;
+    return xstrdup(icons);
+}
+
+static char *persistent_cache_path(const char *source,int size)
+{
+    struct stat st;
+    char *canonical=realpath(source,NULL),*dir=NULL,*out=NULL;
+    char key[PATH_MAX+160];
+    if(!canonical||stat(canonical,&st)<0)goto done;
+    int n=snprintf(key,sizeof key,"%s\n%s\n%lld\n%lld\n%lld\n%d\n",ICON_CACHE_VERSION,canonical,
+        (long long)st.st_mtim.tv_sec,(long long)st.st_mtim.tv_nsec,(long long)st.st_size,size);
+    if(n<0||(size_t)n>=sizeof key)goto done;
+    uint64_t hash=fnv1a(key,(size_t)n,UINT64_C(14695981039346656037));
+    dir=icon_cache_dir();
+    if(!dir)goto done;
+    out=ecalloc(strlen(dir)+32,1);
+    snprintf(out,strlen(dir)+32,"%s/%016llx.png",dir,(unsigned long long)hash);
+done:
+    free(canonical);
+    free(dir);
+    return out;
+}
+
+static cairo_surface_t *load_cached_png(const char *path)
+{
+    cairo_surface_t *surface=cairo_image_surface_create_from_png(path);
+    if(cairo_surface_status(surface)==CAIRO_STATUS_SUCCESS)return surface;
+    cairo_surface_destroy(surface);
+    unlink(path);
+    return NULL;
+}
+
+static cairo_status_t write_png(void *closure,const unsigned char *data,unsigned int length)
+{
+    int fd=*(int *)closure;
+    while(length){
+        ssize_t n=write(fd,data,length);
+        if(n<0&&errno==EINTR)continue;
+        if(n<=0)return CAIRO_STATUS_WRITE_ERROR;
+        data+=(size_t)n;
+        length-=(unsigned int)n;
+    }
+    return CAIRO_STATUS_SUCCESS;
+}
+
+static void store_cached_png(const char *path,cairo_surface_t *surface)
+{
+    char *tmp=ecalloc(strlen(path)+16,1);
+    snprintf(tmp,strlen(path)+16,"%s.tmp.XXXXXX",path);
+    int fd=mkstemp(tmp);
+    if(fd>=0){
+        cairo_status_t status=cairo_surface_write_to_png_stream(surface,write_png,&fd);
+        if(status==CAIRO_STATUS_SUCCESS&&fsync(fd)==0&&close(fd)==0){
+            fd=-1;
+            if(rename(tmp,path)<0)unlink(tmp);
+        }else{
+            if(fd>=0)close(fd);
+            unlink(tmp);
+        }
+    }
+    free(tmp);
+}
+
 static cairo_surface_t *load_png(const char *path,int target)
 {
     FILE *f=fopen(path,"rb");if(!f)return NULL;png_structp png=png_create_read_struct(PNG_LIBPNG_VER_STRING,NULL,NULL,NULL);png_infop info=png?png_create_info_struct(png):NULL;if(!png||!info){if(png)png_destroy_read_struct(&png,NULL,NULL);fclose(f);return NULL;}if(setjmp(png_jmpbuf(png))){png_destroy_read_struct(&png,&info,NULL);fclose(f);return NULL;}
-    png_init_io(png,f);png_read_info(png,info);png_uint_32 w=png_get_image_width(png,info),h=png_get_image_height(png,info);int type=png_get_color_type(png,info),depth=png_get_bit_depth(png,info);if(depth==16)png_set_strip_16(png);if(type==PNG_COLOR_TYPE_PALETTE)png_set_palette_to_rgb(png);if(type==PNG_COLOR_TYPE_GRAY&&depth<8)png_set_expand_gray_1_2_4_to_8(png);if(png_get_valid(png,info,PNG_INFO_tRNS))png_set_tRNS_to_alpha(png);if(type==PNG_COLOR_TYPE_RGB||type==PNG_COLOR_TYPE_GRAY||type==PNG_COLOR_TYPE_PALETTE)png_set_filler(png,0xff,PNG_FILLER_AFTER);if(type==PNG_COLOR_TYPE_GRAY||type==PNG_COLOR_TYPE_GRAY_ALPHA)png_set_gray_to_rgb(png);png_read_update_info(png,info);
+    png_init_io(png,f);png_read_info(png,info);png_uint_32 w=png_get_image_width(png,info),h=png_get_image_height(png,info);int type=png_get_color_type(png,info),depth=png_get_bit_depth(png,info);if(depth==16)png_set_strip_16(png);if(type==PNG_COLOR_TYPE_PALETTE)png_set_palette_to_rgb(png);if(type==PNG_COLOR_TYPE_GRAY&&depth<8)png_set_expand_gray_1_2_4_to_8(png);if(png_get_valid(png,info,PNG_INFO_tRNS))png_set_tRNS_to_alpha(png);if(type==PNG_COLOR_TYPE_RGB||type==PNG_COLOR_TYPE_GRAY||type==PNG_COLOR_TYPE_PALETTE)png_set_filler(png,0xff,PNG_FILLER_AFTER);if(type==PNG_COLOR_TYPE_GRAY||type==PNG_COLOR_TYPE_GRAY_ALPHA)png_set_gray_to_rgb(png);png_set_interlace_handling(png);png_read_update_info(png,info);
     unsigned char *rgba=ecalloc((size_t)w*h,4),**rows=ecalloc(h,sizeof *rows);for(png_uint_32 y=0;y<h;y++)rows[y]=rgba+(size_t)y*w*4;png_read_image(png,rows);free(rows);png_destroy_read_struct(&png,&info,NULL);fclose(f);
     double scale=(double)target/(double)(w>h?w:h);int dw=(int)(w*scale+.5),dh=(int)(h*scale+.5);if(dw<1)dw=1;if(dh<1)dh=1;cairo_surface_t *src=cairo_image_surface_create(CAIRO_FORMAT_ARGB32,(int)w,(int)h);unsigned char *dst=cairo_image_surface_get_data(src);int stride=cairo_image_surface_get_stride(src);for(png_uint_32 y=0;y<h;y++)for(png_uint_32 x=0;x<w;x++){unsigned char *s=rgba+((size_t)y*w+x)*4,*d=dst+y*stride+x*4;unsigned a=s[3];d[0]=(unsigned char)(s[2]*a/255);d[1]=(unsigned char)(s[1]*a/255);d[2]=(unsigned char)(s[0]*a/255);d[3]=(unsigned char)a;}free(rgba);cairo_surface_mark_dirty(src);
     cairo_surface_t *out=cairo_image_surface_create(CAIRO_FORMAT_ARGB32,dw,dh);cairo_t *cr=cairo_create(out);cairo_scale(cr,(double)dw/w,(double)dh/h);cairo_set_source_surface(cr,src,0,0);cairo_pattern_set_filter(cairo_get_source(cr),CAIRO_FILTER_BILINEAR);cairo_paint(cr);cairo_destroy(cr);cairo_surface_destroy(src);return out;
@@ -199,7 +291,7 @@ cairo_surface_t *icon_load(const char *name,int size)
     for(struct cached_icon *c=cache;c;c=c->next)
         if(c->size==size&&!strcmp(c->name,name))
             return c->surface;
-    char *path=resolve_icon(name,size);cairo_surface_t *surface=NULL;if(path){size_t n=strlen(path);if(n>4&&!strcasecmp(path+n-4,".svg"))surface=load_svg(path,size);else surface=load_png(path,size);free(path);}
+    char *path=resolve_icon(name,size);cairo_surface_t *surface=NULL;if(path){char *cached=persistent_cache_path(path,size);if(cached)surface=load_cached_png(cached);if(!surface){size_t n=strlen(path);if(n>4&&!strcasecmp(path+n-4,".svg"))surface=load_svg(path,size);else surface=load_png(path,size);if(surface&&cached)store_cached_png(cached,surface);}free(cached);free(path);}
     struct cached_icon *c=ecalloc(1,sizeof *c);c->name=xstrdup(name);c->size=size;c->surface=surface;c->next=cache;cache=c;return surface;
 }
 void icon_cleanup(void)

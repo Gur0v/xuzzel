@@ -5,7 +5,7 @@ export ASAN_OPTIONS=${ASAN_OPTIONS:-detect_leaks=0}
 
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 
-./xuzzel --version | grep -q '^xuzzel 1\.15\.0-x11\.1$' || fail version
+./xuzzel --version | grep -q '^xuzzel 1\.15\.0-x11\.2$' || fail version
 ./xuzzel --help | grep -q -- '--dmenu' || fail help
 ./xuzzel --config ./xuzzel.ini --check-config
 
@@ -58,10 +58,33 @@ cp "$tmp/data/icons/parent/16x16/apps/tiny.png" "$tmp/data/pixmaps/fallback.png"
 cat > "$tmp/data/icons/hicolor/scalable/apps/vector.svg" <<EOF
 <svg xmlns="http://www.w3.org/2000/svg" width="8" height="4"><rect width="8" height="4" fill="#f00"/></svg>
 EOF
-XDG_DATA_HOME="$tmp/data" XDG_DATA_DIRS= ./xuzzel --icon-probe child tiny 24 || fail icon-theme-inheritance-png
-XDG_DATA_HOME="$tmp/data" XDG_DATA_DIRS= ./xuzzel --icon-probe child vector 24 || fail icon-hicolor-svg
-XDG_DATA_HOME="$tmp/data" XDG_DATA_DIRS= ./xuzzel --icon-probe child fallback 24 || fail icon-pixmaps
-./xuzzel --icon-probe child "$tmp/data/icons/parent/16x16/apps/tiny.png" 24 || fail icon-absolute-png
+XDG_CACHE_HOME="$tmp/cache" XDG_DATA_HOME="$tmp/data" XDG_DATA_DIRS= ./xuzzel --icon-probe child tiny 24 || fail icon-theme-inheritance-png
+XDG_CACHE_HOME="$tmp/cache" XDG_DATA_HOME="$tmp/data" XDG_DATA_DIRS= ./xuzzel --icon-probe child vector 24 || fail icon-hicolor-svg
+XDG_CACHE_HOME="$tmp/cache" XDG_DATA_HOME="$tmp/data" XDG_DATA_DIRS= ./xuzzel --icon-probe child fallback 24 || fail icon-pixmaps
+XDG_CACHE_HOME="$tmp/cache" ./xuzzel --icon-probe child "$tmp/data/icons/parent/16x16/apps/tiny.png" 24 || fail icon-absolute-png
+
+# Persistent rasters survive source decode failure, recover from corrupt cache,
+# and naturally use a new key when source metadata changes.
+source="$tmp/data/icons/parent/16x16/apps/tiny.png"
+cp "$source" "$tmp/original.png"
+touch -r "$source" "$tmp/source-time"
+rm -rf "$tmp/icon-cache"
+XDG_CACHE_HOME="$tmp/icon-cache" ./xuzzel --icon-probe child "$source" 24 || fail icon-cache-first-probe
+cache_file=$(find "$tmp/icon-cache/xuzzel/icons" -type f -name '*.png' | head -n 1)
+[ -n "$cache_file" ] || fail icon-cache-created
+cache_count=$(find "$tmp/icon-cache/xuzzel/icons" -type f -name '*.png' | wc -l)
+dd if=/dev/zero of="$source" bs=1 count=$(wc -c < "$source") 2>/dev/null
+touch -r "$tmp/source-time" "$source"
+XDG_CACHE_HOME="$tmp/icon-cache" ./xuzzel --icon-probe child "$source" 24 || fail icon-cache-hit
+[ "$(find "$tmp/icon-cache/xuzzel/icons" -type f -name '*.png' | wc -l)" -eq "$cache_count" ] || fail icon-cache-hit-created-file
+cp "$tmp/original.png" "$source"
+touch -r "$tmp/source-time" "$source"
+printf 'corrupt' > "$cache_file"
+XDG_CACHE_HOME="$tmp/icon-cache" ./xuzzel --icon-probe child "$source" 24 || fail icon-cache-corrupt-regeneration
+[ "$(dd if="$cache_file" bs=1 count=8 2>/dev/null | od -An -tx1 | tr -d ' \n')" = 89504e470d0a1a0a ] || fail icon-cache-not-regenerated
+printf '\0' >> "$source"
+XDG_CACHE_HOME="$tmp/icon-cache" ./xuzzel --icon-probe child "$source" 24 || fail icon-cache-source-change
+[ "$(find "$tmp/icon-cache/xuzzel/icons" -type f -name '*.png' | wc -l)" -gt "$cache_count" ] || fail icon-cache-source-not-invalidated
 XDG_CONFIG_HOME="$tmp" ./xuzzel --check-config --override lines=3 --override colors.selection=aabbcc
 # Quoted prompt values must parse without retaining their delimiter quotes.
 printf '[main]\nprompt="> "\n[colors]\nselection=aabbcc\n[border]\nwidth=2\n' > "$tmp/sections.ini"

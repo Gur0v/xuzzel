@@ -1,4 +1,4 @@
-.TH XUZZEL 1 "September 2026" "xuzzel 1.15.0-x11.1"
+.TH XUZZEL 1 "September 2026" "xuzzel 1.15.0-x11.2"
 .SH NAME
 xuzzel \- X11 application launcher and dmenu
 .SH SYNOPSIS
@@ -119,6 +119,12 @@ Search order is $XDG_CONFIG_HOME/fuzzel/fuzzel.ini, then $XDG_CONFIG_HOME/xuzzel
 0 on selection or successful validation, 1 on cancellation, greater than zero on errors.
 .SH LIMITATIONS
 Wayland-only layer, namespace, output naming, focus-loss protocol behavior, fractional protocol scaling, IME protocol, transparency/blur, gamma-correct blending, rounded clipping, action submenus, and startup-notification semantics have no exact X11 equivalent. Launcher icons support PNG and SVG, freedesktop theme inheritance, hicolor, pixmaps, and absolute paths. The xuzzel extension --icon-size=PIXELS overrides row-based sizing; fuzzel 1.15 documents no icon-size CLI option. Messages occupy one clipped row; message-mode wrapping/expansion is not implemented or accepted.
+.PP
+Scaled icon rasters are persistently cached as PNG files below
+.IR ${XDG_CACHE_HOME:-$HOME/.cache}/xuzzel/icons .
+The cache key includes the resolved source path, source modification time and size, requested pixel size, and cache format version. Changed sources therefore invalidate naturally. Corrupt entries and cache I/O failures are ignored and regenerated when possible. The
+.B --cache
+option controls launcher history only; it does not relocate the icon raster cache.
 .SH ATTRIBUTION
 Drawing and event-loop structure derive from dmenu 5.4, Copyright 2006-2024 suckless.org, under the repository LICENSE. Fuzzel 1.15.0 manuals and behavior were used as compatibility references; no fuzzel source is incorporated.
 .SH SEE ALSO

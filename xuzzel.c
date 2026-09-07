@@ -43,7 +43,7 @@
 #include "icon.h"
 #include "util.h"
 
-#define VERSION "1.15.0-x11.1"
+#define VERSION "1.15.0-x11.2"
 #define TEXTSZ 4096
 #define TEXTW(s) (drw_fontset_getwidth(drw, (s)))
 
